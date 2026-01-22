@@ -1,0 +1,37 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "D:\\FURG\\Outros\\Simula\u00E7\u00E3o fortran c\u002B\u002B\\Programa\u00E7\u00E3o\\nvfortran\\node_cuda_fortran\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{0B3B3C4C-F699-E592-C624-58298324CCAB}|node_cuda_fortran\\node_cuda_fortran.vfproj|d:\\furg\\outros\\simula\u00E7\u00E3o fortran c\u002B\u002B\\programa\u00E7\u00E3o\\nvfortran\\node_cuda_fortran\\node_cuda_fortran\\node_cuda_fortran.f90||{8B382828-6202-11D1-8870-0000F87579D2}",
+      "RelativeMoniker": "D:0:0:{0B3B3C4C-F699-E592-C624-58298324CCAB}|node_cuda_fortran\\node_cuda_fortran.vfproj|solutionrelative:node_cuda_fortran\\node_cuda_fortran.f90||{8B382828-6202-11D1-8870-0000F87579D2}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 0,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "node_cuda_fortran.f90",
+              "DocumentMoniker": "D:\\FURG\\Outros\\Simula\u00E7\u00E3o fortran c\u002B\u002B\\Programa\u00E7\u00E3o\\nvfortran\\node_cuda_fortran\\node_cuda_fortran\\node_cuda_fortran.f90",
+              "RelativeDocumentMoniker": "node_cuda_fortran\\node_cuda_fortran.f90",
+              "ToolTip": "D:\\FURG\\Outros\\Simula\u00E7\u00E3o fortran c\u002B\u002B\\Programa\u00E7\u00E3o\\nvfortran\\node_cuda_fortran\\node_cuda_fortran\\node_cuda_fortran.f90",
+              "RelativeToolTip": "node_cuda_fortran\\node_cuda_fortran.f90",
+              "ViewState": "AgIAAIkBAAAAAAAAAAAkwCcBAABLAAAAAAAAAA==",
+              "Icon": "00000000-0000-0000-0000-000000000000.000000|iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAACMSURBVDhPxZJBDsQgCEU/sytHM57Cg/UUpEfDpbPSgjVtmc28lZKfJwSptYYOEY2zRVXPkIG3DWQFtdZlEAAO3ucSkparIOfsQgAgIjGBiLggTAdJi6t/3O0FB\u002B9DxswUFsyEBUmLGyMs6DAzISKYX\u002B68FnTmNYcFM/8XLH/iEyIytnAR2OAdS8EvfAEh4EkdDLYrMwAAAABJRU5ErkJgggAAAAAAAAAAAA==",
+              "WhenOpened": "2025-11-10T03:29:13.815Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

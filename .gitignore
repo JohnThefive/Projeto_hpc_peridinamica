@@ -1,0 +1,18 @@
+# Ignorar executáveis
+*.exe
+*.dll
+
+# Ignorar arquivos objetos e módulos Fortran
+*.o
+*.mod
+*.smod
+
+# Ignorar arquivos temporários do Visual Studio / VS Code
+.vscode/
+*.pdb
+*.ilk
+*.suo
+*.sln
+debug/
+release/
+x64/
