@@ -34,7 +34,7 @@ integer nodefam(10000000,1), fail(totnode,maxfam)
 ! TESTANDO A FUNÇÃO DO OPENMP
 integer :: kount, scan_sum  ! 'scan_sum' é a variável de acúmulo
 real *8 :: start_time, end_time
-real *8 :: tempo_total_sim_s1
+real *8 :: t_parte1, t_parte2, t_parte3, tempo_total_sim_s1
 
 ! variaveis para ajudar com o scan paralelo 
 integer :: prefix_offsets(256) ! Vetor auxiliar para soma das threads
@@ -214,11 +214,16 @@ do i = 1, totnode
     enddo
 enddo
 !$OMP END PARALLEL DO
+end_time = omp_get_wtime()   ! Para cronômetro Parte 1
+t_parte1 = end_time - start_time
 
 ! segunda parte - calcula pointfam usando scan  (prefix sum) paralelo
 ! Existe uma função pra fazer essa operção menos verbosa, mas o compilador ainda não suporta
 
+start_time = omp_get_wtime( ) !inicio do cronometro parte 2 
+
 !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(i, tid, nthreads, i_start, i_end, my_sum, my_offset)
+
    tid = omp_get_thread_num() 
    nthreads = omp_get_num_threads()
    
@@ -255,9 +260,15 @@ enddo
        pointfam(i) = pointfam(i) + my_offset
    end do
 !$OMP END PARALLEL
+
+end_time = omp_get_wtime()   ! Para cronômetro Parte 1
+t_parte2 = end_time - start_time ! duração da parte 1 
        
 
 ! terceira parte: Preencher a lista de famílias (nodefam)
+
+start_time = omp_get_wtime()
+
 !$OMP PARALLEL DO PRIVATE(j, idist, kount) SHARED(pointfam, nodefam, coord, delta)
 do i = 1, totnode
     kount = 0
@@ -274,10 +285,10 @@ do i = 1, totnode
 enddo
 !$OMP END PARALLEL DO
 
+end_time = omp_get_wtime()   ! Para cronômetro Parte 1
+t_parte3 = end_time - start_time
 
-end_time = omp_get_wtime()
-
-tempo_total_sim_s1 = end_time - start_time
+tempo_total_sim_s1 = t_parte1 + t_parte2 + t_parte3
 
 print *, "Tempo total de execucao (OMP_GET_WTIME): ", tempo_total_sim_s1, " segundos"
 
@@ -292,8 +303,15 @@ print *, "Iniciando a escrita do arquivo 'familia_resultados.txt'..."
 open(unit=26, file='familia_resultados.txt', status='replace')
 
 ! Escreve o tempo
-write(26, '(A, F12.6, A)') "Tempo de execucao (OMP_GET_WTIME): ", tempo_total_sim_s1, " segundos"
-write(26, *) ""
+write(26, '(A, F12.6, A)') "Tempo de execucao (OMP_GET_WTIME): ", tempo_total_sim_s1, "segundos"
+write(26, *) 
+write(26, '(A, F12.6, A)') "tempo de execucao parte 1 (contagem numfam): ", t_parte1, "segundos"
+write(26, '(A, F12.6, A)') "tempo de execucao parte 2 (calculo pointfam - scan paralelo ): ", t_parte2, "segundos"
+
+write(26, '(A, F12.6, A)') "tempo de execucao parte 3 (preenchimento nodefam): ", t_parte3, "segundos"
+
+write(26, *)
+
 write(26, *) "===================================================="
 write(26, *) "INDICE DOS PONTOS DE CADA FAMILIA (POINTFAM)"
 write(26, *) "Formato: (Indice do Ponto, Indice de Inicio em NODEFAM)"

@@ -1,18 +1,18 @@
-# Ignorar executáveis
-*.exe
-*.dll
+# Ignorar arquivos temporários do Visual Studio
+.vs/
+*.suo
+*.user
+*.sln.docstates
 
-# Ignorar arquivos objetos e módulos Fortran
+# Ignorar arquivos de compilação (binários e objetos)
+*.exe
+*.obj
 *.o
 *.mod
 *.smod
 
-# Ignorar arquivos temporários do Visual Studio / VS Code
-.vscode/
-*.pdb
-*.ilk
-*.suo
-*.sln
-debug/
-release/
+# Ignorar pastas de build comuns
+Debug/
+Release/
 x64/
+x86/
