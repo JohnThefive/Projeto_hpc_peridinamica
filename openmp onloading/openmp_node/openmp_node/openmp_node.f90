@@ -298,9 +298,9 @@ print *, "Tempo total de execucao (OMP_GET_WTIME): ", tempo_total_sim_s1, " segu
 !    Pontos que compoem a familia de cada ponto (nodefam)
 !    Tempo que a simulação levou
 
-print *, "Iniciando a escrita do arquivo 'familia_resultados.txt'..."
+print *, "Iniciando a escrita do arquivo 'familia_resultados_onloading.txt'..."
 
-open(unit=26, file='familia_resultados.txt', status='replace')
+open(unit=26, file='familia_resultados_onloading.txt', status='replace')
 
 ! Escreve o tempo
 write(26, '(A, F12.6, A)') "Tempo de execucao (OMP_GET_WTIME): ", tempo_total_sim_s1, "segundos"
