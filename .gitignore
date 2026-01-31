@@ -10,6 +10,8 @@
 *.o
 *.mod
 *.smod
+*.db
+*.json
 
 # Ignorar pastas de build comuns
 Debug/
