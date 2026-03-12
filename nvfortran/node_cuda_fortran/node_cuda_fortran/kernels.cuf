@@ -1,0 +1,70 @@
+
+module kernels_peridinamica
+    use cudafor
+    implicit none
+
+contains
+
+    ! KERNEL 1: Conta quantos vizinhos cada nó tem no material
+    attributes(global) subroutine conta_vizinhos_gpu(n, coord, delta, numfam)
+        integer, value :: n
+        real(8), value :: delta
+        real(8), device :: coord(n, 2)
+        integer, device :: numfam(n)
+
+        integer :: i, j
+        real(8) :: dist, dx, dy
+
+        ! Identifica qual thread é responsável por qual nó 'i'
+        i = (blockIdx%x - 1) * blockDim%x + threadIdx%x
+
+        if (i <= n) then
+            numfam(i) = 0
+            do j = 1, n
+                if (i == j) cycle
+
+                dx = coord(j,1) - coord(i,1)
+                dy = coord(j,2) - coord(i,2)
+                dist = sqrt(dx*dx + dy*dy)
+
+                if (dist <= delta) then
+                    numfam(i) = numfam(i) + 1
+                end if
+            end do
+        end if
+    end subroutine conta_vizinhos_gpu
+
+    ! KERNEL 2: Preenche a lista nodefam
+    attributes(global) subroutine preenche_nodefam_gpu(n, coord, delta, pointfam, nodefam)
+        integer, value :: n
+        real(8), value :: delta
+        real(8), device :: coord(n, 2)
+        integer, device :: pointfam(n)
+        integer, device :: nodefam(*) ! Ponteiro para array gigante
+
+        integer :: i, j, k, inicio
+        real(8) :: dist, dx, dy
+
+        i = (blockIdx%x - 1) * blockDim%x + threadIdx%x
+
+        if (i <= n) then
+            k = 0 ! Contador local
+            inicio = pointfam(i) ! Onde começa a lista deste nó
+
+            do j = 1, n
+                if (i == j) cycle
+
+                dx = coord(j,1) - coord(i,1)
+                dy = coord(j,2) - coord(i,2)
+                dist = sqrt(dx*dx + dy*dy)
+
+                if (dist <= delta) then
+                    ! Aqui assumimos que pointfam foi calculado corretamente
+                    ! e que nodefam tem espaço suficiente para fazer as conexões
+                    nodefam(inicio + k) = j
+                    k = k + 1
+                end if
+            end do
+        end if
+    end subroutine preenche_nodefam_gpu
+end module kernels_peridinamica
