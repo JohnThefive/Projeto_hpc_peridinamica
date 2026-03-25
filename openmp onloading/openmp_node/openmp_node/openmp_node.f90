@@ -261,8 +261,8 @@ start_time = omp_get_wtime( ) !inicio do cronometro parte 2
    end do
 !$OMP END PARALLEL
 
-end_time = omp_get_wtime()   ! Para cronômetro Parte 1
-t_parte2 = end_time - start_time ! duração da parte 1 
+end_time = omp_get_wtime()   ! Para cronômetro Parte 2
+t_parte2 = end_time - start_time ! duração da parte 2
        
 
 ! terceira parte: Preencher a lista de famílias (nodefam)
@@ -285,7 +285,7 @@ do i = 1, totnode
 enddo
 !$OMP END PARALLEL DO
 
-end_time = omp_get_wtime()   ! Para cronômetro Parte 1
+end_time = omp_get_wtime()   ! Para cronômetro Parte 3
 t_parte3 = end_time - start_time
 
 tempo_total_sim_s1 = t_parte1 + t_parte2 + t_parte3
