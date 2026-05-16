@@ -1,4 +1,3 @@
-
 module kernels_peridinamica
     use cudafor
     implicit none
@@ -67,4 +66,32 @@ contains
             end do
         end if
     end subroutine preenche_nodefam_gpu
+
+    ! KERNEL 3: Responsável pelas boundary conditions 
+    attributes(global) subroutine aplica_bc_gpu(totint, totbottom, tottop, tt, dt, vel, disp)
+        integer, value :: totint, totbottom, tottop, tt
+        real(8), value :: dt
+        real(8), device :: vel(tottop, 2), disp(tottop, 2)
+
+        integer :: i, idx
+
+        ! Global thread ID
+        i = (blockIdx%x - 1) * blockDim%x + threadIdx%x
+        
+        ! Mapeia a thread para o índice real do nó (começando após os nós internos)
+        idx = totint + i
+
+        if (idx <= tottop) then
+            if (idx <= totbottom) then
+                ! Região da borda inferior (Bottom)
+                vel(idx, 2) = -20.0d0
+                disp(idx, 2) = -20.0d0 * tt * dt
+            else
+                ! Região da borda superior (Top)
+                vel(idx, 2) = 20.0d0
+                disp(idx, 2) = 20.0d0 * tt * dt
+            end if
+        end if
+    end subroutine aplica_bc_gpu
+
 end module kernels_peridinamica

@@ -1,7 +1,8 @@
-
+%%writefile main.cuf
 program main
   use cudafor
   use kernels_peridinamica
+  use omp_lib
 
 implicit none
 
@@ -24,74 +25,92 @@ real *8 fncst(totnode,2), disp(totnode,2), vel(totnode,2), velhalfold(totnode,2)
 real *8 acc(totnode,2), massvec(totnode,2), enddisp(nt,1), endtime(nt,1), dmg(totnode,1)
 integer numfam(totnode,1), pointfam(totnode,1), nodefam(10000000,1), fail(totnode,maxfam)
 
-! --- VARIÁVEIS EXCLUSIVAS PARA ACELERAÇÃO CUDA  ---
-! Estas devem ser 'allocatable' para aceitarem o comando allocate mais adiante 
+! --- VARIÁVEIS EXCLUSIVAS PARA ACELERAÇÃO CUDA ---
+! mantendo coord_d 2D. Isso elimina a confusão de indexação nas cópias.
 real(8), device, allocatable :: coord_d(:,:)
-integer, device, allocatable :: numfam_d(:,:)
-integer, device, allocatable :: pointfam_d(:,:)
-integer, device, allocatable :: nodefam_d(:,:)
+integer, device, allocatable :: numfam_d(:)
+integer, device, allocatable :: pointfam_d(:)
+integer, device, allocatable :: nodefam_d(:)
 
-type(dim3) :: grid, block
+type(dim3) :: grid, block, grid_familia
 integer :: threadsPorBloco, numBlocos, err_cuda
 
 ! --- VARIÁVEIS PARA TIMER ---
-integer :: t_inicio_sim, t_final_sim, taxa_clock
-integer :: t1, t2 
-real *8 :: tempo_total_sim_s, tempo_parte_a, tempo_parte_b, tempo_parte_c
+real*8 :: t_inicio_numfam_sim, t_final_numfam_sim
+real*8 :: t1, t2
+real*8 :: tempo_total_sim_s, tempo_parte_a, tempo_parte_b, tempo_parte_c
+
+! --- Variaveis para timer de Boundary conditions ---
+!   Parte A = chamada do kernel (host→device já feito antes do loop)
+!   Parte B = cudaDeviceSynchronize (tempo real do kernel na GPU)
+!   Parte C = transferência device→host (D2H) de vel e disp
+!   Total   = A + B + C acumulado em todos os time steps
+real(8) :: t_bc_inicio_total, t_bc_fim_kernel, t_bc_fim_sync, t_bc_fim_d2h
+real(8) :: tempo_bc_kernel_s  = 0.0d0   ! Parte A: despacho do kernel
+real(8) :: tempo_bc_sync_s    = 0.0d0   ! Parte B: sincronização (execução GPU)
+real(8) :: tempo_bc_d2h_s     = 0.0d0   ! Parte C: cópia device→host
+real(8) :: tempo_total_bc_cuda_s = 0.0d0 ! Total acumulado (A+B+C)
+
+! --- Variaveis de controle do Kernel BC ---
+integer :: n_bordas, ierr
+
+! --- Arrays de GPU para Boundary Conditions ---
+real(8), device, allocatable :: d_vel(:,:)
+real(8), device, allocatable :: d_disp(:,:)
 
 pi = dacos(-1.0d0)
 
 do i = 1, totnode
     !coord: Material point locations, 1:x-coord, 2:y-coord
-	coord(i,1) = 0.0d0
-	coord(i,2) = 0.0d0
+    coord(i,1) = 0.0d0
+    coord(i,2) = 0.0d0
     !numfam: Number of family members of each material point
-	numfam(i,1) = 0
+    numfam(i,1) = 0
     !pointfam: index array to find the family members in nodefam array
-	pointfam(i,1) = 0
+    pointfam(i,1) = 0
     !pforce: total peridynamic force acting on a material point, 1:x-coord, 2:y-coord
-	pforce(i,1) = 0.0d0
-	pforce(i,2) = 0.0d0
+    pforce(i,1) = 0.0d0
+    pforce(i,2) = 0.0d0
     !pforceold: total peridynamic force acting on a material point in the previous time step
     !1:x-coord, 2:y-coord
-	pforceold(i,1) = 0.0d0
-	pforceold(i,2) = 0.0d0
+    pforceold(i,1) = 0.0d0
+    pforceold(i,2) = 0.0d0
     !bforce: body load acting on a material point, 1:x-coord, 2:y-coord
-	bforce(i,1) = 0.0d0
-	bforce(i,2) = 0.0d0
+    bforce(i,1) = 0.0d0
+    bforce(i,2) = 0.0d0
     !stendens: strain energy of a material point, 1:loading 1, 2:loading 2
-	stendens(i,1) = 0.0d0
-	stendens(i,2) = 0.0d0
+    stendens(i,1) = 0.0d0
+    stendens(i,2) = 0.0d0
     !fncst: surface correction factors of a material point, 1:loading 1, 2:loading 2
-	fncst(i,1) = 1.0d0
-	fncst(i,2) = 1.0d0
+    fncst(i,1) = 1.0d0
+    fncst(i,2) = 1.0d0
     !disp: displacement of a material point, 1:x-coord, 2:y-coord
-	disp(i,1) = 0.0d0
-	disp(i,2) = 0.0d0
+    disp(i,1) = 0.0d0
+    disp(i,2) = 0.0d0
     !vel: velocity of a material point, 1:x-coord, 2:y-coord
-	vel(i,1) = 0.0d0
-	vel(i,2) = 0.0d0
-	velhalfold(i,1) = 0.0d0
-	velhalfold(i,2) = 0.0d0
-	velhalf(i,1) = 0.0d0
-	velhalf(i,2) = 0.0d0
+    vel(i,1) = 0.0d0
+    vel(i,2) = 0.0d0
+    velhalfold(i,1) = 0.0d0
+    velhalfold(i,2) = 0.0d0
+    velhalf(i,1) = 0.0d0
+    velhalf(i,2) = 0.0d0
     !acc: acceleration of a material point, 1:x-coord, 2:y-coord
-	acc(i,1) = 0.0d0
-	acc(i,2) = 0.0d0
+    acc(i,1) = 0.0d0
+    acc(i,2) = 0.0d0
     !massvec: massvector for adaptive dynamic relaxation, 1:x-coord, 2:y-coord
-	massvec(i,1) = 0.0d0
-	massvec(i,2) = 0.0d0
+    massvec(i,1) = 0.0d0
+    massvec(i,2) = 0.0d0
     !fail: Failure array
-	do j = 1, maxfam
-		fail(i,j) = 0
+    do j = 1, maxfam
+        fail(i,j) = 0
     enddo
     !dmg: Damage of a material point
-	dmg(i,1) = 0.0d0
+    dmg(i,1) = 0.0d0
 enddo
 
-do i = 1, 1000000
+do i = 1, 10000000
     !nodefam: array containing family members of all material points
-	nodefam(i,1) = 0
+    nodefam(i,1) = 0
 enddo
 
 !length: Total length of the plate
@@ -101,7 +120,7 @@ width = 0.05d0
 !dx: Spacing between material points
 dx = length / ndivx
 !delta: Horizon
-delta = 3.015 * dx
+delta = 3.015d0 * dx
 !thick: Thickness of the plate
 thick = dx
 !dens: Density
@@ -129,8 +148,8 @@ ctime = 0.0d0
 !idist: Initial distance
 idist = 0.0d0
 do i = 1, nt
-	enddisp(i,1) = 0.0d0
-	endtime(i,1) = 0.0d0
+    enddisp(i,1) = 0.0d0
+    endtime(i,1) = 0.0d0
 enddo
 !fac: Volume correction factor
 fac = 0.0d0
@@ -144,7 +163,7 @@ cnode = 0
 nlength  = 0.0d0
 !dforce1: x component of the PD force between two material points
 dforce1 = 0.0d0
-!dforce1: y component of the PD force between two material points
+!dforce2: y component of the PD force between two material points
 dforce2 = 0.0d0
 !crlength: Crack length
 crlength = 0.01d0
@@ -154,8 +173,8 @@ scr0 = 0.04472d0
 !Initialization of fail flag array
 !1 means no failure, 0 means failure of the PD bond
 do i = 1,totnode
-	do j = 1,maxfam
-		fail(i,j) = 1
+    do j = 1,maxfam
+        fail(i,j) = 1
     enddo
 enddo
 
@@ -175,8 +194,8 @@ totint = nnum
 do i = 1,nbnd
     do j = 1,ndivx
         nnum = nnum + 1
-        coord(nnum,1) = -1.0d0 /2.0d0 * length + (dx / 2.0d0) + (j - 1) * dx
-        coord(nnum,2) = -1.0d0 /2.0d0 * width - (dx / 2.0d0) - (i - 1) * dx
+        coord(nnum,1) = -1.0d0 / 2.0d0 * length + (dx / 2.0d0) + (j - 1) * dx
+        coord(nnum,2) = -1.0d0 / 2.0d0 * width - (dx / 2.0d0) - (i - 1) * dx
     enddo
 enddo
 
@@ -186,8 +205,8 @@ totbottom = nnum
 do i = 1,nbnd
     do j = 1,ndivx
         nnum = nnum + 1
-        coord(nnum,1) = -1.0d0 /2.0d0 * length + (dx / 2.0d0) + (j - 1) * dx
-        coord(nnum,2) = 1.0d0 /2.0d0 * width + (dx / 2.0d0) + (i - 1) * dx
+        coord(nnum,1) = -1.0d0 / 2.0d0 * length + (dx / 2.0d0) + (j - 1) * dx
+        coord(nnum,2) =  1.0d0 / 2.0d0 * width + (dx / 2.0d0) + (i - 1) * dx
     enddo
 enddo
 
@@ -196,87 +215,327 @@ tottop = nnum
 
 !------------------------------- COMEÇA A VER O TEMPO AQUI --------------------------------------------!
 
-!T_Inicio = Ler o tempo aqui
-call SYSTEM_CLOCK(count=t_inicio_sim, count_rate=taxa_clock)
-! Essa é uma forma de verificar o tempo do proprio Fortran90
+!  grid_familia e block definidos ANTES das chamadas de kernel
+block       = dim3(256, 1, 1)
+grid_familia = dim3((totnode + 255) / 256, 1, 1)
 
-!Aloca a memoria na GPU paea os arrays
+!Alocação e transferência CPU→GPU dos arrays de família
+! ANTES das chamadas de kernel. 
 allocate(coord_d(totnode, 2))
-allocate(numfam_d(totnode, 1))
-allocate(pointfam_d(totnode, 1))
-allocate(nodefam_d(10000000, 1))
+allocate(numfam_d(totnode))
+allocate(pointfam_d(totnode))
+allocate(nodefam_d(10000000))
 
-!Determination of material points inside the horizon of each material 
-
-! Envia as voordenadas para o GPU 
 coord_d(1:totnode, 1:2) = coord(1:totnode, 1:2)
+numfam_d(1:totnode)     = 0
+pointfam_d(1:totnode)   = 0
+nodefam_d(1:10000000)   = 0
 
-! Configura a grade da GPU 
-threadsPorBloco = 256
-numBlocos = (totnode + threadsPorBloco - 1) / threadsPorBloco
-block = dim3(threadsPorBloco, 1, 1)
-grid = dim3(numBlocos, 1, 1)
+! Timer iniciado ANTES do trabalho que será medido.
+t_inicio_numfam_sim = omp_get_wtime()
 
-!-----------Chama o kernel (Conta os vizinhos na CPU)------------------
-call SYSTEM_CLOCK(count=t1) 
+t1 = omp_get_wtime()
 
-! Chama os kernels (Conta os vizinhos na GPU)
-call conta_vizinhos_gpu<<<grid, block>>>(totnode, coord_d, delta, numfam_d)
+! Chama o kernel 1: conta os vizinhos na GPU
+call conta_vizinhos_gpu<<<grid_familia, block>>>(totnode, coord_d, delta, numfam_d)
 err_cuda = cudaDeviceSynchronize()
 
-! Traz numfam para a CPU
-numfam(1:totnode, 1) = numfam_d(1:totnode, 1)
+! numfam no host é (totnode,1)
+numfam(1:totnode, 1) = numfam_d(1:totnode)
 
-!Tempo da parte 1
-call SYSTEM_CLOCK(count=t2)
-tempo_parte_a = real(t2 - t1) / real(taxa_clock)
+! Tempo da parte A
+t2 = omp_get_wtime()
+tempo_parte_a = t2 - t1
 
 
-call SYSTEM_CLOCK(count=t1)
+! Início contagem do tempo parte B (Scan na CPU)
+t1 = omp_get_wtime()
 
-! Scan na CPU (O mesmo cálculo original, mas separado do loop de distância)
-pointfam(1, 1) = 1
+!  Indexação 2D correta no scan da CPU
+pointfam(1,1) = 1
 do i = 2, totnode
-    pointfam(i, 1) = pointfam(i-1, 1) + numfam(i-1, 1)
+    pointfam(i,1) = pointfam(i-1,1) + numfam(i-1,1)
 enddo
 
-call SYSTEM_CLOCK(count=t2) ! Fim tempo Parte B
-tempo_parte_b = real(t2 - t1) / real(taxa_clock)
+! Fim tempo Parte B
+t2 = omp_get_wtime()
+tempo_parte_b = t2 - t1
 
-!Inicio contagem do tempo parte 3 
-call SYSTEM_CLOCK(count=t1)
 
-! Preenche nodefam na GPU
-! Envia pointfam calculado
-pointfam_d(1:totnode, 1) = pointfam(1:totnode, 1) 
+! Início contagem do tempo parte C
+t1 = omp_get_wtime()
 
-!Chama o segundo Kernel 
-call preenche_nodefam_gpu<<<grid, block>>>(totnode, coord_d, delta, pointfam_d, nodefam_d)
+! pointfam no host é (totnode,1)
+pointfam_d(1:totnode) = pointfam(1:totnode, 1)
+
+! Chama o kernel 2: preenche nodefam na GPU
+call preenche_nodefam_gpu<<<grid_familia, block>>>(totnode, coord_d, delta, pointfam_d, nodefam_d)
 err_cuda = cudaDeviceSynchronize()
 
 ! Traz nodefam de volta para a CPU
-nodefam(1:10000000, 1) = nodefam_d(1:10000000, 1)
+nodefam(1:10000000, 1) = nodefam_d(1:10000000)
 
-call SYSTEM_CLOCK(count=t2) ! Fim tempo Parte C
-tempo_parte_c = real(t2 - t1) / real(taxa_clock)
+! Fim tempo Parte C
+t2 = omp_get_wtime()
+tempo_parte_c = t2 - t1
 
-! Libera a memória da placa de vídeo (não precisamos mais dela)
+! Libera a memória de GPU dos arrays de família (não serão mais usados)
 deallocate(coord_d, numfam_d, pointfam_d, nodefam_d)
 
-call system_clock(count=t_final_sim)
-tempo_total_sim_s = real(t_final_sim - t_inicio_sim) / real(taxa_clock)
+! Usando t_final_numfam_sim (variável declarada corretamente)
 
-!------------------------------- RODAR ATÉ AQUI! --------------------------------------------!
+t_final_numfam_sim = omp_get_wtime()
+tempo_total_sim_s = t_final_numfam_sim - t_inicio_numfam_sim
 
-! Imprime os resultados no terminal para o seu relatório
-print *, "------------------------------------------------"
-print *, "ANALISE DE DESEMPENHO (CUDA Fortran)"
-print *, "------------------------------------------------"
-print *, "Tempo Parte 1 (contagem na GPU + Transferencia): ", tempo_parte_a, "s"
-print *, "Tempo Parte 2 (CPU scan (prefix sum)):             ", tempo_parte_b, "s"
-print *, "Tempo Parte 3 (GPU preenchendo + Transfererencia):  ", tempo_parte_c, "s"
-print *, "Tempo Total (Inclui Alocacoes gpu <-> cpu):       ", tempo_total_sim_s, "s"
-print *, "------------------------------------------------"
+! -------------------- Término da busca de família (NUMFAM_POINTFAM) -------------------------
+
+
+!Definition of the crack surface
+!PD bonds penetrating through the crack surface are broken
+do i = 1,totnode
+    do j = 1,numfam(i,1)
+        cnode = nodefam(pointfam(i,1)+j-1,1)
+        if ((coord(cnode,2) > 0.0d0).and.(coord(i,2) < 0.0d0)) then
+            if ((dabs(coord(i,1)) - (crlength / 2.0d0)).le.1.0d-10) then
+                fail(i,j) = 0
+            elseif ((dabs(coord(cnode,1)) - (crlength / 2.0d0)).le.1.0d-10) then
+                fail(i,j) = 0
+            endif
+        elseif ((coord(i,2) > 0.0d0).and.(coord(cnode,2) < 0.0d0)) then
+            if((dabs(coord(i,1)) - (crlength / 2.0d0)).le.1.0d-10) then
+                fail(i,j) = 0
+            ! [CORREÇÃO BUG 7] 1.0e-10 (single) corrigido para 1.0d-10 (double)
+            ! para consistência com o restante do código real*8.
+            elseif((dabs(coord(cnode,1)) - (crlength / 2.0d0)).le.1.0d-10) then
+                fail(i,j) = 0
+            endif
+        endif
+    enddo
+enddo
+
+!Loading 1
+do i = 1,totnode
+    disp(i,1) = 0.001d0 * coord(i,1)
+    disp(i,2) = 0.0d0
+enddo
+
+do i = 1,totnode
+    stendens(i,1) = 0.0d0
+    do j = 1,numfam(i,1)
+        cnode = nodefam(pointfam(i,1)+j-1,1)
+        idist = dsqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
+        nlength = dsqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + &
+                        (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
+        if (idist.le.delta-radij) then
+            fac = 1.0d0
+        elseif (idist.le.delta+radij) then
+            fac = (delta+radij-idist)/(2.0d0*radij)
+        else
+            fac = 0.0d0
+        endif
+        stendens(i,1) = stendens(i,1) + 0.5d0 * 0.5d0 * bc * ((nlength - idist) / idist)**2 * idist * vol * fac
+    enddo
+    !Calculation of surface correction factor in x direction
+    !by finding the ratio of the analytical strain energy density value
+    !to the strain energy density value obtained from PD Theory
+    fncst(i,1) = sedload1 / stendens(i,1)
+enddo
+
+!Loading 2
+do i = 1,totnode
+    disp(i,1) = 0.0d0
+    disp(i,2) = 0.001d0 * coord(i,2)
+enddo
+
+do i = 1,totnode
+    stendens(i,2) = 0.0d0
+    do j = 1,numfam(i,1)
+        cnode = nodefam(pointfam(i,1)+j-1,1)
+        idist = dsqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
+        nlength = dsqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + &
+                        (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
+        if (idist.le.delta-radij) then
+            fac = 1.0d0
+        elseif (idist.le.delta+radij) then
+            fac = (delta+radij-idist)/(2.0d0*radij)
+        else
+            fac = 0.0d0
+        endif
+        stendens(i,2) = stendens(i,2) + 0.5d0 * 0.5d0 * bc * ((nlength - idist) / idist)**2 * idist * vol * fac
+    enddo
+    !Calculation of surface correction factor in y direction
+    !by finding the ratio of the analytical strain energy density value
+    !to the strain energy density value obtained from PD Theory
+    fncst(i,2) = sedload2 / stendens(i,2)
+enddo
+
+!Initialization of displacements and velocities
+do i = 1,totnode
+    vel(i,1) = 0.0d0
+    vel(i,2) = 0.0d0
+    disp(i,1) = 0.0d0
+    disp(i,2) = 0.0d0
+enddo
+
+! --- Configuração do kernel de Boundary Conditions ---
+
+block    = dim3(256, 1, 1)
+n_bordas = tottop - totint
+grid     = dim3((n_bordas + block%x - 1) / block%x, 1, 1)
+
+! --- Alocação e inicialização dos arrays de GPU para BC ---
+allocate(d_vel(tottop, 2))
+allocate(d_disp(tottop, 2))
+d_vel(1:tottop, 1:2)  = vel(1:tottop, 1:2)
+d_disp(1:tottop, 1:2) = disp(1:tottop, 1:2)
+
+!Time integration
+do tt = 1,nt
+    write(*,*) 'tt = ', tt
+    ctime = tt * dt
+
+    !______________________________DAQUI____________________________________________
+
+    ! --- PARTE A: despacho do kernel ---
+    t_bc_inicio_total = omp_get_wtime()
+
+    call aplica_bc_gpu<<<grid, block>>>(totint, totbottom, tottop, tt, dt, d_vel, d_disp)
+
+    t_bc_fim_kernel = omp_get_wtime()
+    tempo_bc_kernel_s = tempo_bc_kernel_s + (t_bc_fim_kernel - t_bc_inicio_total)
+
+    ! --- PARTE B: sincronização (aguarda a GPU terminar de executar o kernel) ---
+    ierr = cudaDeviceSynchronize()
+
+    t_bc_fim_sync = omp_get_wtime()
+    tempo_bc_sync_s = tempo_bc_sync_s + (t_bc_fim_sync - t_bc_fim_kernel)
+
+    ! --- PARTE C: transferência device→host ---
+    vel(1:tottop, 1:2)  = d_vel(1:tottop, 1:2)
+    disp(1:tottop, 1:2) = d_disp(1:tottop, 1:2)
+
+    t_bc_fim_d2h = omp_get_wtime()
+    tempo_bc_d2h_s        = tempo_bc_d2h_s        + (t_bc_fim_d2h - t_bc_fim_sync)
+    tempo_total_bc_cuda_s = tempo_total_bc_cuda_s + (t_bc_fim_d2h - t_bc_inicio_total)
+
+    !______________________________ATÉ AQUI____________________________________________
+
+
+    !______________________________________AQUI__________________________________________
+
+    do i = 1,totnode
+        dmgpar1 = 0.0d0
+        dmgpar2 = 0.0d0
+        pforce(i,1) = 0.0d0
+        pforce(i,2) = 0.0d0
+        do j = 1,numfam(i,1)
+            cnode = nodefam(pointfam(i,1)+j-1,1)
+            idist = dsqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
+            nlength = dsqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + &
+                            (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
+            !Volume correction
+            if (idist.le.delta-radij) then
+                fac = 1.0d0
+            elseif (idist.le.delta+radij) then
+                fac = (delta+radij-idist)/(2.0d0*radij)
+            else
+                fac = 0.0d0
+            endif
+            if (dabs(coord(cnode,2) - coord(i,2)).le.1.0d-10) then
+                theta = 0.0d0
+            elseif (dabs(coord(cnode,1) - coord(i,1)).le.1.0d-10) then
+                theta = 90.0d0 * pi / 180.0d0
+            else
+                theta = datan(dabs(coord(cnode,2) - coord(i,2)) / dabs(coord(cnode,1) - coord(i,1)))
+            endif
+            !Determination of the surface correction between two material points
+            scx = (fncst(i,1) + fncst(cnode,1)) / 2.0d0
+            scy = (fncst(i,2) + fncst(cnode,2)) / 2.0d0
+            scr = 1.0d0 / (((dcos(theta))**2 / (scx)**2) + ((dsin(theta))**2 / (scy)**2))
+            scr = dsqrt(scr)
+
+            if (fail(i,j).eq.1) then
+                !Calculation of the peridynamic force in x and y directions
+                !acting on a material point i due to a material point j
+                dforce1 = bc * (nlength - idist) / idist * vol * scr * fac * &
+                          (coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1)) / nlength
+                dforce2 = bc * (nlength - idist) / idist * vol * scr * fac * &
+                          (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2)) / nlength
+            else
+                dforce1 = 0.0d0
+                dforce2 = 0.0d0
+            endif
+            pforce(i,1) = pforce(i,1) + dforce1
+            pforce(i,2) = pforce(i,2) + dforce2
+
+            !Definition of a no-fail zone
+            if (dabs((nlength - idist) / idist) > scr0) then
+                if (dabs(coord(i,2)).le.(length/4.0d0)) then
+                    fail(i,j) = 0
+                endif
+            endif
+
+            dmgpar1 = dmgpar1 + fail(i,j) * vol * fac
+            dmgpar2 = dmgpar2 + vol * fac
+        enddo
+        !Calculation of the damage parameter
+        dmg(i,1) = 1.0d0 - dmgpar1 / dmgpar2
+    enddo
+
+    !_________________________________________________ATÉ AQUI_____________________________________________________________
+
+    do i = 1,totint
+        !Calculation of acceleration of material point i
+        acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
+        acc(i,2) = (pforce(i,2) + bforce(i,2)) / dens
+        !Calculation of velocity of material point i
+        !by integrating the acceleration of material point i
+        vel(i,1) = vel(i,1) + acc(i,1) * dt
+        vel(i,2) = vel(i,2) + acc(i,2) * dt
+        !Calculation of displacement of material point i
+        !by integrating the velocity of material point i
+        disp(i,1) = disp(i,1) + vel(i,1) * dt
+        disp(i,2) = disp(i,2) + vel(i,2) * dt
+    enddo
+
+    do i = (totint+1), totbottom
+        acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
+        vel(i,1) = vel(i,1) + acc(i,1) * dt
+        disp(i,1) = disp(i,1) + vel(i,1) * dt
+    enddo
+
+    do i = (totbottom+1), tottop
+        acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
+        vel(i,1) = vel(i,1) + acc(i,1) * dt
+        disp(i,1) = disp(i,1) + vel(i,1) * dt
+    enddo
+
+    endtime(tt,1) = ctime
+
+    if (tt.eq.750) then
+        !printing results to an output file
+        open(26,file = 'coord_disp_pd_750_pwc_v20.txt')
+        do i = 1, totint
+            write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
+        enddo
+        close(26)
+    elseif (tt.eq.1000) then
+        open(26,file = 'coord_disp_pd_1000_pwc_v20.txt')
+        do i = 1, totint
+            write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
+        enddo
+        close(26)
+    elseif (tt.eq.1250) then
+        open(26,file = 'coord_disp_pd_1250_pwc_v20.txt')
+        do i = 1, totint
+            write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
+        enddo
+        close(26)
+    endif
+
+enddo
+
+111 format(e12.5,3x,e12.5,3x,e12.5,3x,e12.5,3x,e12.5)
 
 !------------------------------- ESCREVENDO DOCUMENTO TXT --------------------------------------------!
 
@@ -284,7 +543,20 @@ print *, "Gravando resultados no arquivo 'familia_resultados_cuda.txt'..."
 
 open(unit=26, file='familia_resultados_cuda.txt', status='replace')
 
-! Escreve os tempos medidos (Inclusão das etapas A, B e C)
+! Medição de tempo do BC
+write(26, *) "===================================================="
+write(26, *) "         METRICAS DE Boundary Conditions            "
+write(26, *) "===================================================="
+write(26, *) ""
+write(26, *) "--- CONDICOES DE CONTORNO (BC) ---"
+write(26, *) "--- TEMPOS ACUMULADOS (", nt, " time steps) ---"
+write(26, '(A, F12.6, A)') "Parte A - Despacho do kernel    : ", tempo_bc_kernel_s,    " s"
+write(26, '(A, F12.6, A)') "Parte B - Sincronizacao GPU     : ", tempo_bc_sync_s,      " s"
+write(26, '(A, F12.6, A)') "Parte C - Transf. device->host  : ", tempo_bc_d2h_s,       " s"
+write(26, '(A, F12.6, A)') "TOTAL BC                        : ", tempo_total_bc_cuda_s," s"
+write(26, *) "===================================================="
+write(26, *) ""
+! Escreve os tempos medidos (etapas A, B e C)
 write(26, *) "===================================================="
 write(26, *) "RELATORIO DE DESEMPENHO (CUDA FORTRAN)"
 write(26, *) "===================================================="
@@ -300,18 +572,18 @@ write(26, *) "===================================================="
 write(26, *) "INDICE DOS PONTOS DE CADA FAMILIA (POINTFAM)"
 write(26, *) "===================================================="
 do i = 1, totnode
-    write(26, '(I10, A, I10)') i, " , ", pointfam(i, 1)
+    write(26, '(I10, A, I10)') i, " , ", pointfam(i,1)
 enddo
 
 write(26, *) ""
 
-! 3. Escreve o NODEFAM 
+! Escreve o NODEFAM
 write(26, *) "===================================================="
 write(26, *) "PONTOS QUE COMPOEM A FAMILIA (NODEFAM)"
 write(26, *) "===================================================="
 do i = 1, totnode
     write(26, '(A, I10, A, I6, A)') "Familia do Ponto ", i, " (Total: ", numfam(i,1), ")"
-    
+
     if (numfam(i,1) > 0) then
         do j = 1, numfam(i,1)
             write(26, '(I10, 1x)', advance='no') nodefam(pointfam(i,1) + j - 1, 1)
@@ -326,224 +598,5 @@ enddo
 close(26)
 print *, "Arquivo gravado com sucesso!"
 
-
-!------------------------------- FIM DA EXECUÇÃO DO DOCUMENTO TXT --------------------------------------------!
-
-
-!Definition of the crack surface
-!PD bonds penetrating through the crack surface are broken
-!do i = 1,totnode
-!    do j = 1,numfam(i,1)
-!        cnode = nodefam(pointfam(i,1)+j-1,1)
-!        if ((coord(cnode,2) > 0.0d0).and.(coord(i,2) < 0.0d0)) then
-!            if ((dabs(coord(i,1)) - (crlength / 2.0d0)).le.1.0d-10) then
-!				fail(i,j) = 0
-!            elseif ((dabs(coord(cnode,1)) - (crlength / 2.0d0)).le.1.0d-10) then
-!				fail(i,j) = 0
-!            endif
-!        elseif ((coord(i,2) > 0.0d0).and.(coord(cnode,2) < 0.0d0)) then
-!            if((dabs(coord(i,1)) - (crlength / 2.0d0)).le.1.0d-10) then
-!				fail(i,j) = 0
-!			elseif((dabs(coord(cnode,1)) - (crlength / 2.0d0)).le.1.0e-10) then
-!				fail(i,j) = 0
-!            endif
-!        endif
-!    enddo
-!enddo
-
-!Loading 1
-!do i = 1,totnode
-!    disp(i,1) = 0.001d0 * coord(i,1)
-!    disp(i,2) = 0.0d0
-!enddo
-
-!do i = 1,totnode
-!    stendens(i,1) = 0.0d0
-!    do j = 1,numfam(i,1)
-!        cnode = nodefam(pointfam(i,1)+j-1,1)
-!        idist = dsqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
-!        nlength = dsqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
-!        if (idist.le.delta-radij) then
-!            fac = 1.0d0
-!        elseif (idist.le.delta+radij) then
-!            fac = (delta+radij-idist)/(2.0d0*radij)
-!        else
-!            fac = 0.0d0
-!        endif
-!
-!        stendens(i,1) = stendens(i,1) + 0.5d0 * 0.5d0 * bc * ((nlength - idist) / idist)**2 * idist * vol * fac
-!    enddo
-!    !Calculation of surface correction factor in x direction
-!    !by finding the ratio of the analytical strain energy density value
-!    !to the strain energy density value obtained from PD Theory
-!    fncst(i,1) = sedload1 / stendens(i,1)
-!enddo
-
-!Loading 2
-!do i = 1,totnode
-!    disp(i,1) = 0.0d0
-!    disp(i,2) = 0.001d0 * coord(i,2)
-!enddo
-
-!do i = 1,totnode
-!    stendens(i,2) = 0.0d0
-!    do j = 1,numfam(i,1)
-!        cnode = nodefam(pointfam(i,1)+j-1,1)
-!        idist = dsqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
-!        nlength = dsqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
-!          if (idist.le.delta-radij) then
-!            fac = 1.0d0
-!        elseif (idist.le.delta+radij) then
-!            fac = (delta+radij-idist)/(2.0d0*radij)
-!        else
-!            fac = 0.0d0
-!        endif
-!
-!        stendens(i,2) = stendens(i,2) + 0.5d0 * 0.5d0 * bc * ((nlength - idist) / idist)**2 * idist * vol * fac
-!    enddo
-!    !Calculation of surface correction factor in y direction
-!    !by finding the ratio of the analytical strain energy density value
-!    !to the strain energy density value obtained from PD Theory
-!    fncst(i,2) = sedload2 / stendens(i,2)
-!enddo
-
-!Initialization of displacements and velocities
-!do i = 1,totnode
-!    vel(i,1) = 0.0d0
-!    vel(i,2) = 0.0d0
-!    disp(i,1) = 0.0d0
-!    disp(i,2) = 0.0d0
-!enddo
-
-!Time integration
-!do tt = 1,nt
-!    write(*,*) 'tt = ', tt
-!	ctime = tt * dt
-
-    !Application of boundary conditions at the top and bottom edges
-!    do i = (totint+1), totbottom
-!        vel(i,2) = -20.0d0
-!        disp(i,2) = -20.0d0 * tt * dt
-!    enddo
-
-!    do i = (totbottom+1), tottop
-!        vel(i,2) = 20.0d0
-!        disp(i,2) = 20.0d0 * tt * dt
-!    enddo
-
-!    do i = 1,totnode
-!        dmgpar1 = 0.0d0
-!        dmgpar2 = 0.0d0
-!        pforce(i,1) = 0.0d0
-!        pforce(i,2) = 0.0d0
-!        do j = 1,numfam(i,1)
-!                cnode = nodefam(pointfam(i,1)+j-1,1)
-!                idist = dsqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
-!                nlength = dsqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
-!                !Volume correction
-!                if (idist.le.delta-radij) then
-!                    fac = 1.0d0
-!                elseif (idist.le.delta+radij) then
-!                    fac = (delta+radij-idist)/(2.0d0*radij)
-!                else
-!                    fac = 0.0d0
-!                endif
-!                if (dabs(coord(cnode,2) - coord(i,2)).le.1.0d-10) then
-!                    theta = 0.0d0
-!                elseif (dabs(coord(cnode,1) - coord(i,1)).le.1.0d-10) then
-!                    theta = 90.0d0 * pi / 180.0d0
-!                else
-!                    theta = datan(dabs(coord(cnode,2) - coord(i,2)) / dabs(coord(cnode,1) - coord(i,1)))
-!                endif
-!                !Determination of the surface correction between two material points
-!                scx = (fncst(i,1) + fncst(cnode,1)) / 2.0d0
-!                scy = (fncst(i,2) + fncst(cnode,2)) / 2.0d0
-!                scr = 1.0d0 / (((dcos(theta))**2 / (scx)**2) + ((dsin(theta))**2 / (scy)**2))
-!                scr = dsqrt(scr)
-!
-!                if (fail(i,j).eq.1) then
-!                    !Calculation of the peridynamic force in x and y directions
-!                    !acting on a material point i due to a material point j
-!                    dforce1 = bc * (nlength - idist) / idist * vol * scr * fac * (coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1)) / nlength
-!                    dforce2 = bc * (nlength - idist) / idist * vol * scr * fac * (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2)) / nlength
-!                else
-!                	dforce1 = 0.0d0
-!                    dforce2 = 0.0d0
-!                endif
-!                pforce(i,1) = pforce(i,1) + dforce1
-!                pforce(i,2) = pforce(i,2) + dforce2
-!
-!                !Definition of a no-fail zone
-!                if (dabs((nlength - idist) / idist) > scr0) then
-!                    if (dabs(coord(i,2)).le.(length/4.0d0)) then
-!						fail(i,j) = 0
-!					endif
-!                endif
-!
-!                dmgpar1 = dmgpar1 + fail(i,j) * vol * fac
-!                dmgpar2 = dmgpar2 + vol * fac
-!        enddo
-!        !Calculation of the damage parameter
-!        dmg(i,1) = 1.0d0 - dmgpar1 / dmgpar2
-!    enddo
-!
-!    do i = 1,totint
-!        !Calculation of acceleration of material point i
-!        acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
-!        acc(i,2) = (pforce(i,2) + bforce(i,2)) / dens
-!        !Calculation of velocity of material point i
-!        !by integrating the acceleration of material point i
-!        vel(i,1) = vel(i,1) + acc(i,1) * dt
-!        vel(i,2) = vel(i,2) + acc(i,2) * dt
-!        !Calculation of displacement of material point i
-!        !by integrating the velocity of material point i
-!        disp(i,1) = disp(i,1) + vel(i,1) * dt
-!        disp(i,2) = disp(i,2) + vel(i,2) * dt
-!    enddo
-!
-!    do i = (totint+1), totbottom
-!        acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
-!        vel(i,1) = vel(i,1) + acc(i,1) * dt
-!        disp(i,1) = disp(i,1) + vel(i,1) * dt
-!    enddo
-!
-!    do i = (totbottom+1), tottop
-!            acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
-!            vel(i,1) = vel(i,1) + acc(i,1) * dt
-!            disp(i,1) = disp(i,1) + vel(i,1) * dt
-!    enddo
-!
-!    endtime(tt,1) = ctime
-!
-!	if (tt.eq.750) then
-!        !printing results to an output file
-!		open(26,file = 'coord_disp_pd_750_pwc_v20.txt')
-!
-!		do i = 1, totint
-!			write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
-!		enddo
-!
-!		close(26)
-!	elseif (tt.eq.1000) then
-!		open(26,file = 'coord_disp_pd_1000_pwc_v20.txt')
-!
-!		do i = 1, totint
-!			write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
-!		enddo
-!
-!		close(26)
-!	elseif (tt.eq.1250) then
-!		open(26,file = 'coord_disp_pd_1250_pwc_v20.txt')
-!
-!		do i = 1, totint
-!			write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
-!		enddo
-!
-!		close(26)
-!	endif
-
-!enddo
-
-!111 format(e12.5,3x,e12.5,3x,e12.5,3x,e12.5,3x,e12.5)
 
 end program main
