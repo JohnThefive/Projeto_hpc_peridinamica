@@ -26,10 +26,8 @@ real *8 coord(totnode,2), pforce(totnode,2), pforceold(totnode,2), bforce(totnod
 real *8 fncst(totnode,2), disp(totnode,2), vel(totnode,2), velhalfold(totnode,2), velhalf(totnode,2)
 real *8 acc(totnode,2), massvec(totnode,2), enddisp(nt,1), endtime(nt,1), dmg(totnode,1)
 
-
 integer numfam(totnode), pointfam(totnode)
 integer nodefam(10000000,1), fail(totnode,maxfam)
-
 
 ! TESTANDO A FUNÇÃO DO OPENMP
 integer :: kount, scan_sum  ! 'scan_sum' é a variável de acúmulo
@@ -44,10 +42,16 @@ real*8 :: t_inicio_bc, t_final_bc
 real*8 :: tempo_total_forca_s
 real*8 :: t_inicio_forca, t_final_forca
 
+! Variáveis para o tempo de I/O e Wall-clock total
+real*8 :: t_inicio_io, t_final_io, tempo_total_io_s
+real*8 :: t_inicio_total, t_final_total, tempo_wall_clock
 
 ! variaveis para ajudar com o scan paralelo 
 integer :: prefix_offsets(256) ! Vetor auxiliar para soma das threads
 integer :: tid, nthreads, i_start, i_end, my_sum, my_offset, global_accum
+
+! Inicializa o cronômetro total do programa
+t_inicio_total = omp_get_wtime()
 
 pi = dacos(-1.0d0)
 
@@ -102,7 +106,7 @@ do i = 1, totnode
     dmg(i,1) = 0.0d0
 enddo
 
-do i = 1, 10000000 ! <- Corrigido de 1.000.000 para 10.000.000
+do i = 1, 10000000 !
     !nodefam: array containing family members of all material points
     nodefam(i,1) = 0
 enddo
@@ -165,7 +169,6 @@ crlength = 0.01d0
 scr0 = 0.04472d0
 
 !Initialization of fail flag array
-!1 means no failure, 0 means failure of the PD bond
 do i = 1,totnode
     do j = 1,maxfam
         fail(i,j) = 1
@@ -207,8 +210,7 @@ enddo
 tottop = nnum
 
 
-
-! inicio do codigo paralelizado (parte 1)
+! ------------------ Inicio do codigo paralelizado (parte 1) ------------------
 start_time = omp_get_wtime()
 !$OMP PARALLEL DO PRIVATE(j, idist) SHARED(numfam, coord, delta)
 do i = 1, totnode
@@ -223,43 +225,35 @@ do i = 1, totnode
     enddo
 enddo
 !$OMP END PARALLEL DO
-end_time = omp_get_wtime()   ! Para cronômetro Parte 1
+end_time = omp_get_wtime()   
 t_parte1 = end_time - start_time
 
-! segunda parte - calcula pointfam usando scan  (prefix sum) paralelo
-! Existe uma função pra fazer essa operção menos verbosa, mas o compilador ainda não suporta
-
-start_time = omp_get_wtime( ) !inicio do cronometro parte 2 
+! ------------------ segunda parte - calcula pointfam usando scan ------------------
+start_time = omp_get_wtime() 
 
 !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(i, tid, nthreads, i_start, i_end, my_sum, my_offset)
-
    tid = omp_get_thread_num() 
    nthreads = omp_get_num_threads()
    
-   ! divisão para distribuir o trabalho 
    i_start = (totnode * tid) / nthreads + 1
    i_end   = (totnode * (tid + 1)) / nthreads
    
-   !scan local manual 
    my_sum = 0
    do i = i_start, i_end
        pointfam(i) = my_sum
        my_sum = my_sum + numfam(i)
    end do 
    
-   !salva o total parcial de cada therad 
    prefix_offsets(tid + 1) = my_sum
    
-   ! Espera todas as threads terminarem a Fase 1
    !$OMP BARRIER
    
-   !   Cálculo dos Offsets Globais (Feito por uma só thread)
    !$OMP SINGLE
      global_accum = 1
      do i = 1, nthreads
-         my_offset = prefix_offsets(i)   ! Pega o total da thread 'i'
-         prefix_offsets(i) = global_accum ! Define onde a thread 'i' deve começar
-         global_accum = global_accum + my_offset ! Incrementa o acumulador global
+         my_offset = prefix_offsets(i)   
+         prefix_offsets(i) = global_accum 
+         global_accum = global_accum + my_offset 
      end do 
    !$OMP END SINGLE
    !$OMP BARRIER  
@@ -270,12 +264,11 @@ start_time = omp_get_wtime( ) !inicio do cronometro parte 2
    end do
 !$OMP END PARALLEL
 
-end_time = omp_get_wtime()   ! Para cronômetro Parte 2
-t_parte2 = end_time - start_time ! duração da parte 2
+end_time = omp_get_wtime()   
+t_parte2 = end_time - start_time 
         
 
-! terceira parte: Preencher a lista de famílias (nodefam)
-
+! ------------------ terceira parte: Preencher a lista de famílias ------------------
 start_time = omp_get_wtime()
 
 !$OMP PARALLEL DO PRIVATE(j, idist, kount) SHARED(pointfam, nodefam, coord, delta)
@@ -286,7 +279,6 @@ do i = 1, totnode
             idist = dsqrt((coord(j,1) - coord(i,1))**2 + (coord(j,2) - coord(i,2))**2)
             if (idist <= delta) then
                 kount = kount + 1
-                ! pointfam(i) agora é 1D
                 nodefam(pointfam(i) + kount - 1, 1) = j
             endif
         endif
@@ -294,20 +286,17 @@ do i = 1, totnode
 enddo
 !$OMP END PARALLEL DO
 
-end_time = omp_get_wtime()   ! Para cronômetro Parte 3
+end_time = omp_get_wtime()   
 t_parte3 = end_time - start_time
 
 tempo_total_sim_s1 = t_parte1 + t_parte2 + t_parte3
-
-
-!     ________________________________ Fim Do trecho paralelizado __________________________________________________________
+! ------------------ Fim Do trecho paralelizado da topologia ------------------
 
 
     
-    !Definition of the crack surface
-!PD bonds penetrating through the crack surface are broken
+!Definition of the crack surface
 do i = 1,totnode
-    do j = 1,numfam(i) ! <- CORRIGIDO para 1D
+    do j = 1,numfam(i) 
         cnode = nodefam(pointfam(i)+j-1,1)
         if ((coord(cnode,2) > 0.0d0).and.(coord(i,2) < 0.0d0)) then
             if ((dabs(coord(i,1)) - (crlength / 2.0d0)).le.1.0d-10) then
@@ -333,8 +322,8 @@ enddo
 
 do i = 1,totnode
     stendens(i,1) = 0.0d0
-    do j = 1,numfam(i) ! <- CORRIGIDO para 1D
-        cnode = nodefam(pointfam(i)+j-1,1) ! <- CORRIGIDO para 1D
+    do j = 1,numfam(i) 
+        cnode = nodefam(pointfam(i)+j-1,1) 
         idist = dsqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
         nlength = dsqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
         if (idist.le.delta-radij) then
@@ -347,9 +336,6 @@ do i = 1,totnode
                         
         stendens(i,1) = stendens(i,1) + 0.5d0 * 0.5d0 * bc * ((nlength - idist) / idist)**2 * idist * vol * fac  
     enddo
-    !Calculation of surface correction factor in x direction 
-    !by finding the ratio of the analytical strain energy density value
-    !to the strain energy density value obtained from PD Theory
     fncst(i,1) = sedload1 / stendens(i,1)
 enddo
     
@@ -361,8 +347,8 @@ enddo
 
 do i = 1,totnode
     stendens(i,2) = 0.0d0
-    do j = 1,numfam(i) ! <- CORRIGIDO para 1D
-        cnode = nodefam(pointfam(i)+j-1,1) ! <- CORRIGIDO para 1D
+    do j = 1,numfam(i)
+        cnode = nodefam(pointfam(i)+j-1,1) 
         idist = dsqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
         nlength = dsqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
         if (idist.le.delta-radij) then
@@ -375,9 +361,6 @@ do i = 1,totnode
                       
         stendens(i,2) = stendens(i,2) + 0.5d0 * 0.5d0 * bc * ((nlength - idist) / idist)**2 * idist * vol * fac 
     enddo
-    !Calculation of surface correction factor in y direction 
-    !by finding the ratio of the analytical strain energy density value
-    !to the strain energy density value obtained from PD Theory
     fncst(i,2) = sedload2 / stendens(i,2)
 enddo
     
@@ -390,22 +373,21 @@ do i = 1,totnode
 enddo
 
 
-! Zera o acumulador de tempo 
+! Zera os acumuladores de tempo 
 tempo_total_bc_s = 0.0d0
+tempo_total_forca_s = 0.0d0
     
 !Time integration
 do tt = 1,nt
     write(*,*) 'tt = ', tt
     ctime = tt * dt
+    
+    !------------------------------------------------------------------- Daqui ---------------------------------------------------------------------
 
-! ______________________________DAQUI____________________________________________
-    t_inicio_bc = omp_get_wtime() ! Início do cronômetro para a parte de boundary conditions     
+    t_inicio_bc = omp_get_wtime() 
     
-    !vamos usar direitivas do openmp
     !$omp parallel default(shared) private(i)
-    
     !$omp do
-    !Application of boundary conditions at the top and bottom edges
     do i = (totint+1), totbottom
         vel(i,2) = -20.0d0
         disp(i,2) = -20.0d0 * tt * dt
@@ -418,22 +400,17 @@ do tt = 1,nt
         disp(i,2) = 20.0d0 * tt * dt
     enddo   
     !$omp end do
-    
     !$omp end parallel
     
-    t_final_bc = omp_get_wtime()    ! Captura o tempo final
-    tempo_total_bc_s = tempo_total_bc_s + (t_final_bc - t_inicio_bc) !  Acumula direto
+    t_final_bc = omp_get_wtime()   
+    tempo_total_bc_s = tempo_total_bc_s + (t_final_bc - t_inicio_bc) 
     
-!______________________________ATÉ AQUI ____________________________________________ 
+    !------------------------------------------------------------------- Até aqui ---------------------------------------------------------------------
     
-! Zera o acumulador de tempo das forças e dano
-tempo_total_forca_s = 0.0d0
+    
+    !------------------------------------------------------------------- Daqui ---------------------------------------------------------------------
 
-!______________________________________AQUI__________________________________________
-
-    t_inicio_forca = omp_get_wtime() ! Inicia o cronômetro antes do laço paralelo
-    
-    ! Calculo da força peridnamica e do dano. 
+    t_inicio_forca = omp_get_wtime() 
     
     !$OMP PARALLEL DO DEFAULT(SHARED) &
     !$OMP PRIVATE(i, j, dmgpar1, dmgpar2, cnode, idist, nlength, fac, &
@@ -472,18 +449,16 @@ tempo_total_forca_s = 0.0d0
                 scr = dsqrt(scr)
                 
                 if (fail(i,j).eq.1) then
-                    !Calculation of the peridynamic force in x and y directions 
-                    !acting on a material point i due to a material point j
-                    dforce1 = bc * (nlength - idist) / idist * vol * scr * fac * (coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1)) / nlength             
-                    dforce2 = bc * (nlength - idist) / idist * vol * scr * fac * (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2)) / nlength             
+                    dforce1 = bc * (nlength - idist) / idist * vol * scr * fac * (coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1)) / nlength              
+                    dforce2 = bc * (nlength - idist) / idist * vol * scr * fac * (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2)) / nlength              
                 else
                     dforce1 = 0.0d0
                     dforce2 = 0.0d0
                 endif 
-                pforce(i,1) = pforce(i,1) + dforce1             
-                pforce(i,2) = pforce(i,2) + dforce2             
+                pforce(i,1) = pforce(i,1) + dforce1              
+                pforce(i,2) = pforce(i,2) + dforce2              
                 
-                !Definition of a no-fail zone             
+                !Definition of a no-fail zone              
                 if (dabs((nlength - idist) / idist) > scr0) then
                     if (dabs(coord(i,2)).le.(length/4.0d0)) then
                         fail(i,j) = 0 
@@ -491,26 +466,23 @@ tempo_total_forca_s = 0.0d0
                 endif                      
                             
                 dmgpar1 = dmgpar1 + fail(i,j) * vol * fac
-                dmgpar2 = dmgpar2 + vol * fac             
+                dmgpar2 = dmgpar2 + vol * fac              
         enddo
         !Calculation of the damage parameter
         dmg(i,1) = 1.0d0 - dmgpar1 / dmgpar2
     enddo
     !$OMP END PARALLEL DO
     
-    t_final_forca = omp_get_wtime() ! Captura o tempo final do laço
-    tempo_total_forca_s = tempo_total_forca_s + (t_final_forca - t_inicio_forca) ! Acumula o tempo gasto
-   ! _________________________________________________ATÉ AQUI_____________________________________________________________ 
+    t_final_forca = omp_get_wtime() 
+    tempo_total_forca_s = tempo_total_forca_s + (t_final_forca - t_inicio_forca) 
+    
+    !------------------------------------------------------------------- Até aqui ---------------------------------------------------------------------
+   
     do i = 1,totint
-        !Calculation of acceleration of material point i
         acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
         acc(i,2) = (pforce(i,2) + bforce(i,2)) / dens
-        !Calculation of velocity of material point i
-        !by integrating the acceleration of material point i
         vel(i,1) = vel(i,1) + acc(i,1) * dt
         vel(i,2) = vel(i,2) + acc(i,2) * dt
-        !Calculation of displacement of material point i
-        !by integrating the velocity of material point i
         disp(i,1) = disp(i,1) + vel(i,1) * dt
         disp(i,2) = disp(i,2) + vel(i,2) * dt
     enddo
@@ -530,68 +502,31 @@ tempo_total_forca_s = 0.0d0
     endtime(tt,1) = ctime
 
     if (tt.eq.750) then
-        !printing results to an output file
         open(26,file = 'coord_disp_pd_750_pwc_v20.txt')
-
         do i = 1, totint
             write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
         enddo
-
         close(26)
     elseif (tt.eq.1000) then
         open(26,file = 'coord_disp_pd_1000_pwc_v20.txt')
-
         do i = 1, totint
             write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
         enddo
-
         close(26)
     elseif (tt.eq.1250) then
         open(26,file = 'coord_disp_pd_1250_pwc_v20.txt')
-
         do i = 1, totint
             write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
         enddo
-
         close(26)
     endif
 
 enddo
 
-print *, "Tempo total de execucao (OMP_GET_WTIME): ", tempo_total_sim_s1, " segundos"
-
-
-! 1) Escrever um arquivo de saida com os seguintes dados:
-!    Indice dos pontos de cada familia (pointfam)
-!    Pontos que compoem a familia de cada ponto (nodefam)
-!    Tempo que a simulação levou
-
-print *, "Iniciando a escrita do arquivo 'familia_resultados_onloading.txt'..."
+! --------------------------- Inicio da escrita dos resultados -------------------------------   
+t_inicio_io = omp_get_wtime()
 
 open(unit=26, file='familia_resultados_onloading.txt', status='replace')
-
-! Escreve o tempo
-write(26, '(A, F12.6, A)') "Tempo de execucao (OMP_GET_WTIME): ", tempo_total_sim_s1, "segundos"
-write(26, *) 
-write(26, '(A, F12.6, A)') "tempo de execucao parte 1 (contagem numfam): ", t_parte1, "segundos"
-write(26, '(A, F12.6, A)') "tempo de execucao parte 2 (calculo pointfam - scan paralelo ): ", t_parte2, "segundos"
-
-write(26, '(A, F12.6, A)') "tempo de execucao parte 3 (preenchimento nodefam): ", t_parte3, "segundos"
-
-write(26, *)
-write(26, *) "===================================================="
-write(26, *) "TEMPO DAS CONDICOES DE CONTORNO (BC)"
-write(26, *) "===================================================="
-write(26, '(A, F12.6, A)') "Tempo acumulado das condicoes de contorno: ", tempo_total_bc_s, " segundos"
-
-write(26, *) 
-
-write(26, *) "===================================================="
-write(26, *) "TEMPO DO LOOP PRINCIPAL DE FORÇAS E DANO (BENCHMARK)"
-write(26, *) "===================================================="
-write(26, '(A, F12.6, A)') "Tempo acumulado do loop de forca/dano: ", tempo_total_forca_s, " segundos"
-
-write(26, *) 
 
 write(26, *) "===================================================="
 write(26, *) "INDICE DOS PONTOS DE CADA FAMILIA (POINTFAM)"
@@ -611,24 +546,41 @@ do i = 1, totnode
     write(26, '(A, I10, A, I6, A)') "Familia do Ponto ", i, " (Total: ", numfam(i), ")"
     
     if (numfam(i) > 0) then
-        ! Escreve todos os 'j' membros da família 'i'
-        ! Usamos advance='no' para tentar colocar vários na mesma linha
         do j = 1, numfam(i)
             write(26, '(I10, 1x)', advance='no') nodefam(pointfam(i) + j - 1, 1)
         enddo
-        write(26, *) ! Quebra de linha para a proxima familia
+        write(26, *) 
     else
         write(26, '(A)') "  (Familia vazia)"
     endif
-    write(26, *) ! Linha em branco extra para separar
+    write(26, *) 
 enddo
+
+! Fechamos os relógios de I/O e Total antes do encerramento do arquivo
+t_final_io = omp_get_wtime()
+tempo_total_io_s = t_final_io - t_inicio_io
+
+t_final_total = omp_get_wtime()
+tempo_wall_clock = t_final_total - t_inicio_total
+
+! Escrevemos o bloco consolidado de performance no fim do log
+write(26, *) ""
+write(26, *) "===== RESUMO DE PERFORMANCE (PARALELO) ====="
+write(26, '(A, F12.6, A)') "Tempo Total da Topologia (Fase 1+2+3): ", tempo_total_sim_s1, " s"
+write(26, '(A, F12.6, A)') "  -> Parte 1 (Contagem):                 ", t_parte1, " s"
+write(26, '(A, F12.6, A)') "  -> Parte 2 (Scan/Prefix Sum):          ", t_parte2, " s"
+write(26, '(A, F12.6, A)') "  -> Parte 3 (Preenchimento):            ", t_parte3, " s"
+write(26, '(A, F12.6, A)') "Tempo das Condicoes (BC):              ", tempo_total_bc_s, " s"
+write(26, '(A, F12.6, A)') "Tempo de Forcas/Dano:                  ", tempo_total_forca_s, " s"
+write(26, '(A, F12.6, A)') "Tempo de Escrita (I/O):                ", tempo_total_io_s, " s"
+write(26, '(A, F12.6, A)') "Tempo Total do Programa (Wall-clock):  ", tempo_wall_clock, " s"
+write(26, *) "============================================"
 
 close(26)
 
-print *, "Escrita do arquivo concluida."
+print *, "Simulacao finalizada com sucesso!"
+print *, "O relatorio de performance foi salvo no final de 'familia_resultados_onloading.txt'."
 
 111 format(e12.5,3x,e12.5,3x,e12.5,3x,e12.5,3x,e12.5)
-
-
 
 end program openmp_node
