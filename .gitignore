@@ -3,6 +3,7 @@
 *.suo
 *.user
 *.sln.docstates
+*.sln
 
 # Ignorar arquivos de compilação (binários e objetos)
 *.exe
@@ -12,6 +13,8 @@
 *.smod
 *.db
 *.json
+
+.db
 
 # Ignorar pastas de build comuns
 Debug/

@@ -19,16 +19,18 @@ program main
     real*8 fncst(totnode,2), disp(totnode,2), vel(totnode,2), velhalfold(totnode,2), velhalf(totnode,2)
     real*8 acc(totnode,2), massvec(totnode,2), enddisp(nt,1), endtime(nt,1), dmg(totnode,1)
     integer numfam(totnode,1), pointfam(totnode,1), nodefam(10000000,1), fail(totnode,maxfam)
-
-    ! --- VARIÁVEIS PARA TIMER ---
-    integer :: t_inicio_sim, t_final_sim, t_inicio_io, t_final_io, taxa_clock
-    real*8 :: tempo_total_sim_s, tempo_total_io_s
     
-    ! --- VARIÁVEIS para timer BC conditions
-    integer :: t_inicio_bc, t_final_bc
-    real*8  :: tempo_total_bc_s
+    ! --- VARIÁVEIS PARA TIMER (OpenMP wtime) ---
+    real*8 :: t_inicio_sim, t_final_sim, tempo_total_sim_s ! tempo das distancias das familias de contagem (numfam, nodefam e pointfam) 
+    real*8 :: t_inicio_bc, t_final_bc, tempo_total_bc_s
+    real*8 :: t_inicio_forca, t_final_forca, tempo_total_forca_s
+    real*8 :: t_inicio_io, t_final_io, tempo_total_io_s
+    real*8 :: t_inicio_total, t_final_total, tempo_wall_clock  ! Tempo total do programa 
     
     ! ----------------------------
+    
+    ! Inicia o cronômetro absoluto do programa
+    t_inicio_total = omp_get_wtime()
 
     pi = dacos(-1.0d0)
 
@@ -140,8 +142,8 @@ program main
     
 # ___________________________________________________ Inicio do calculo DA familia de cada ponto _________________________________________________________________________    
 
-    call SYSTEM_CLOCK(count=t_inicio_sim, count_rate=taxa_clock) 
-
+    t_inicio_sim = omp_get_wtime()
+    
     do i = 1,totnode
         if (i.eq.1) then 
             pointfam(i,1) = 1
@@ -158,11 +160,9 @@ program main
             endif
         enddo
     enddo
-     
-
-    call system_clock(count=t_final_sim)
-    tempo_total_sim_s = real(t_final_sim - t_inicio_sim) / real(taxa_clock)
     
+    t_final_sim = omp_get_wtime()
+    tempo_total_sim_s = t_final_sim - t_inicio_sim
 # ___________________________________________________ final do calculo DA familia de cada ponto _________________________________________________________________________  
     
 
@@ -252,9 +252,6 @@ do i = 1,totnode
     disp(i,2) = 0.0d0         
 enddo
 
-! Lemos a taxa do clock do sistema uma vez para converter os ticks em segundos
-call system_clock(count_rate=taxa_clock)
-
 ! contagem de tempo para aplicãção das condições de contorno
 tempo_total_bc_s = 0.0d0
 !Time integration
@@ -263,11 +260,8 @@ do tt = 1,nt
 	ctime = tt * dt
 
 ! ______________________________DAQUI____________________________________________
+    t_inicio_bc = omp_get_wtime()
     
-   
-    ! Captura o tempo inicial (em ticks)
-    call system_clock(count=t_inicio_bc)
-
     !Application of boundary conditions at the top and bottom edges
     do i = (totint+1), totbottom
         vel(i,2) = -20.0d0
@@ -279,16 +273,13 @@ do tt = 1,nt
         disp(i,2) = 20.0d0 * tt * dt
     enddo   
     
-    ! Captura o tempo final (em ticks)
-    call system_clock(count=t_final_bc)
+    t_final_bc = omp_get_wtime()
+    tempo_total_bc_s = tempo_total_bc_s + (t_final_bc - t_inicio_bc)
     
-    ! Calcula a diferença e converte para segundos usando a taxa do clock
-    tempo_total_bc_s = tempo_total_bc_s + (real(t_final_bc - t_inicio_bc, 8) / real(taxa_clock, 8))
-    
-
 !______________________________ATÉ AQUI ____________________________________________ 
 
 !______________________________________AQUI__________________________________________
+    t_inicio_forca = omp_get_wtime()
     
     do i = 1,totnode
         dmgpar1 = 0.0d0
@@ -345,7 +336,13 @@ do tt = 1,nt
         !Calculation of the damage parameter
         dmg(i,1) = 1.0d0 - dmgpar1 / dmgpar2
     enddo
+    
+    !contagem de tempo para o caulculo das forças internas e do dano
+    t_final_forca = omp_get_wtime()
+    tempo_total_forca_s = tempo_total_forca_s + (t_final_forca - t_inicio_forca)
    ! _________________________________________________ATÉ AQUI_____________________________________________________________ 
+    
+    
     do i = 1,totint
         !Calculation of acceleration of material point i
         acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
@@ -403,22 +400,12 @@ do tt = 1,nt
 
 enddo
 
-! --------------------------- Inicio DA escrita dos resultados -------------------------------   
+! --------------------------- Inicio DA escrita dos resultados -------------------------------
 
-
-    call system_clock(count=t_inicio_io)
+    t_inicio_io = omp_get_wtime()
     
     open(unit=26, file='familia_resultados.txt', status='replace')
 
-    write(26, '(A, F12.6, A)') "Tempo de execucao do CALCULO: ", tempo_total_sim_s, " segundos"
-    write(26, *) ""
-    write(26, *)
-    write(26, *) "===================================================="
-    write(26, *) "TEMPO DAS CONDICOES DE CONTORNO (BC)"
-    write(26, *) "===================================================="
-    write(26, '(A, F12.6, A)') "Tempo acumulado das condicoes de contorno: ", tempo_total_bc_s, " segundos"
-
-    write(26, *) 
     write(26, *) "===================================================="
     write(26, *) "INDICE DOS PONTOS DE CADA FAMILIA (POINTFAM)"
     write(26, *) "===================================================="
@@ -442,16 +429,29 @@ enddo
         endif
         write(26, *)
     enddo
+
+    ! Fechamos os cronometros de I/O e Total ANTES de fechar o arquivo
+    t_final_io = omp_get_wtime()
+    tempo_total_io_s = t_final_io - t_inicio_io
+    
+    t_final_total = omp_get_wtime()
+    tempo_wall_clock = t_final_total - t_inicio_total
+
+    !  Escrevemos o bloco de performance direto no final do arquivo
+    write(26, *) ""
+    write(26, *) "===== RESUMO DE PERFORMANCE (SEQUENCIAL) ====="
+    write(26, '(A, F12.6, A)') "Tempo de Pre-processamento: ", tempo_total_sim_s, " s"
+    write(26, '(A, F12.6, A)') "Tempo das Condicoes (BC)  : ", tempo_total_bc_s, " s"
+    write(26, '(A, F12.6, A)') "Tempo de Forcas/Dano      : ", tempo_total_forca_s, " s"
+    write(26, '(A, F12.6, A)') "Tempo de Escrita (I/O)    : ", tempo_total_io_s, " s"
+    write(26, '(A, F12.6, A)') "Tempo Total do Programa   : ", tempo_wall_clock, " s"
+    write(26, *) "=============================================="
+
+    !Fechamos o arquivo 
     close(26)
 
-    call system_clock(count=t_final_io)
-    tempo_total_io_s = real(t_final_io - t_inicio_io) / real(taxa_clock)
-
-    print *, "Tempo total gasto na ESCRITA (I/O): ", tempo_total_io_s, " segundos"
-    
-!     ________________________________ Fim DA Escrita do documento __________________________________________________________
+    print *, "O relatorio de performance foi salvo no final de 'familia_resultados.txt'."
 
 111 format(e12.5,3x,e12.5,3x,e12.5,3x,e12.5,3x,e12.5)
-
 
 end program main

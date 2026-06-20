@@ -26,7 +26,7 @@ real *8 coord(totnode,2), pforce(totnode,2), pforceold(totnode,2), bforce(totnod
 real *8 fncst(totnode,2), disp(totnode,2), vel(totnode,2), velhalfold(totnode,2), velhalf(totnode,2)
 real *8 acc(totnode,2), massvec(totnode,2), enddisp(nt,1), endtime(nt,1), dmg(totnode,1)
 
-! mudando as variaveis para 1d 
+
 integer numfam(totnode), pointfam(totnode)
 integer nodefam(10000000,1), fail(totnode,maxfam)
 
@@ -39,6 +39,10 @@ real *8 :: t_parte1, t_parte2, t_parte3, tempo_total_sim_s1
 ! para marcar o tempo do loop de boundary conditions 
 real*8 :: tempo_total_bc_s
 real*8 :: t_inicio_bc, t_final_bc
+
+! Variáveis para marcar o tempo do loop de forças e dano
+real*8 :: tempo_total_forca_s
+real*8 :: t_inicio_forca, t_final_forca
 
 
 ! variaveis para ajudar com o scan paralelo 
@@ -421,18 +425,30 @@ do tt = 1,nt
     tempo_total_bc_s = tempo_total_bc_s + (t_final_bc - t_inicio_bc) !  Acumula direto
     
 !______________________________ATÉ AQUI ____________________________________________ 
+    
+! Zera o acumulador de tempo das forças e dano
+tempo_total_forca_s = 0.0d0
 
 !______________________________________AQUI__________________________________________
+
+    t_inicio_forca = omp_get_wtime() ! Inicia o cronômetro antes do laço paralelo
     
+    ! Calculo da força peridnamica e do dano. 
+    
+    !$OMP PARALLEL DO DEFAULT(SHARED) &
+    !$OMP PRIVATE(i, j, dmgpar1, dmgpar2, cnode, idist, nlength, fac, &
+    !$OMP         theta, scx, scy, scr, dforce1, dforce2) &
+    !$OMP SCHEDULE(GUIDED)
     do i = 1,totnode
         dmgpar1 = 0.0d0
         dmgpar2 = 0.0d0
         pforce(i,1) = 0.0d0
         pforce(i,2) = 0.0d0
-        do j = 1,numfam(i) ! <- CORRIGIDO para 1D           
-                cnode = nodefam(pointfam(i)+j-1,1) ! <- CORRIGIDO para 1D
+        do j = 1,numfam(i)          
+                cnode = nodefam(pointfam(i)+j-1,1) 
                 idist = dsqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
                 nlength = dsqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
+                
                 !Volume correction
                 if (idist.le.delta-radij) then
                     fac = 1.0d0
@@ -448,6 +464,7 @@ do tt = 1,nt
                 else
                     theta = datan(dabs(coord(cnode,2) - coord(i,2)) / dabs(coord(cnode,1) - coord(i,1)))
                 endif
+                
                 !Determination of the surface correction between two material points
                 scx = (fncst(i,1) + fncst(cnode,1)) / 2.0d0
                 scy = (fncst(i,2) + fncst(cnode,2)) / 2.0d0
@@ -479,6 +496,10 @@ do tt = 1,nt
         !Calculation of the damage parameter
         dmg(i,1) = 1.0d0 - dmgpar1 / dmgpar2
     enddo
+    !$OMP END PARALLEL DO
+    
+    t_final_forca = omp_get_wtime() ! Captura o tempo final do laço
+    tempo_total_forca_s = tempo_total_forca_s + (t_final_forca - t_inicio_forca) ! Acumula o tempo gasto
    ! _________________________________________________ATÉ AQUI_____________________________________________________________ 
     do i = 1,totint
         !Calculation of acceleration of material point i
@@ -562,6 +583,13 @@ write(26, *) "===================================================="
 write(26, *) "TEMPO DAS CONDICOES DE CONTORNO (BC)"
 write(26, *) "===================================================="
 write(26, '(A, F12.6, A)') "Tempo acumulado das condicoes de contorno: ", tempo_total_bc_s, " segundos"
+
+write(26, *) 
+
+write(26, *) "===================================================="
+write(26, *) "TEMPO DO LOOP PRINCIPAL DE FORÇAS E DANO (BENCHMARK)"
+write(26, *) "===================================================="
+write(26, '(A, F12.6, A)') "Tempo acumulado do loop de forca/dano: ", tempo_total_forca_s, " segundos"
 
 write(26, *) 
 
