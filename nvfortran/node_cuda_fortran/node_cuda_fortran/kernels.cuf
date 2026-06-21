@@ -67,7 +67,7 @@ contains
         end if
     end subroutine preenche_nodefam_gpu
 
-    ! KERNEL 3: Responsável pelas boundary conditions 
+    ! KERNEL 3: Responsável pelas boundary conditions
     attributes(global) subroutine aplica_bc_gpu(totint, totbottom, tottop, tt, dt, vel, disp)
         integer, value :: totint, totbottom, tottop, tt
         real(8), value :: dt
@@ -77,7 +77,7 @@ contains
 
         ! Global thread ID
         i = (blockIdx%x - 1) * blockDim%x + threadIdx%x
-        
+
         ! Mapeia a thread para o índice real do nó (começando após os nós internos)
         idx = totint + i
 
@@ -93,5 +93,124 @@ contains
             end if
         end if
     end subroutine aplica_bc_gpu
+
+    
+    ! KERNEL 4: Calcula Forças Peridinâmicas e Dano
+    attributes(global) subroutine calcula_forca_dano_gpu(totnode, maxfam, coord, disp, pforce, fail, dmg, &
+                                                         numfam, pointfam, nodefam, fncst, &
+                                                         delta, radij, pi, bc, vol, scr0, comp_placa)
+        implicit none
+        integer, value :: totnode, maxfam
+        real(8), value :: delta, radij, pi, bc, vol, scr0, comp_placa
+        real(8), device :: coord(totnode, 2), disp(totnode, 2)
+        real(8), device :: pforce(totnode, 2), dmg(totnode, 1), fncst(totnode, 2)
+        integer, device :: numfam(totnode, 1), pointfam(totnode, 1), nodefam(*)
+        integer, device :: fail(totnode, maxfam)
+
+        integer :: i, j, cnode
+        real(8) :: dmgpar1, dmgpar2, idist, nlength, fac, theta, scx, scy, scr, dforce1, dforce2
+
+        ! Identifica a thread global e mapeia para o nó 'i'
+        i = (blockIdx%x - 1) * blockDim%x + threadIdx%x
+
+        if (i <= totnode) then
+            dmgpar1 = 0.0d0
+            dmgpar2 = 0.0d0
+            pforce(i,1) = 0.0d0
+            pforce(i,2) = 0.0d0
+
+            do j = 1, numfam(i,1)
+                cnode = nodefam(pointfam(i,1) + j - 1)
+                
+                idist = sqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
+                nlength = sqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + &
+                               (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
+
+                ! Volume correction
+                if (idist <= delta - radij) then
+                    fac = 1.0d0
+                else if (idist <= delta + radij) then
+                    fac = (delta + radij - idist) / (2.0d0 * radij)
+                else
+                    fac = 0.0d0
+                end if
+
+                ! Determinação do angulo
+                if (abs(coord(cnode,2) - coord(i,2)) <= 1.0d-10) then
+                    theta = 0.0d0
+                else if (abs(coord(cnode,1) - coord(i,1)) <= 1.0d-10) then
+                    theta = 90.0d0 * pi / 180.0d0
+                else
+                    theta = atan(abs(coord(cnode,2) - coord(i,2)) / abs(coord(cnode,1) - coord(i,1)))
+                end if
+
+                ! Surface correction
+                scx = (fncst(i,1) + fncst(cnode,1)) / 2.0d0
+                scy = (fncst(i,2) + fncst(cnode,2)) / 2.0d0
+                scr = 1.0d0 / (((cos(theta))**2 / (scx)**2) + ((sin(theta))**2 / (scy)**2))
+                scr = sqrt(scr)
+
+                if (fail(i,j) == 1) then
+                    dforce1 = bc * (nlength - idist) / idist * vol * scr * fac * &
+                              (coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1)) / nlength
+                    dforce2 = bc * (nlength - idist) / idist * vol * scr * fac * &
+                              (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2)) / nlength
+                else
+                    dforce1 = 0.0d0
+                    dforce2 = 0.0d0
+                end if
+
+                pforce(i,1) = pforce(i,1) + dforce1
+                pforce(i,2) = pforce(i,2) + dforce2
+
+                ! Definition of a no-fail zone
+                if (abs((nlength - idist) / idist) > scr0) then
+                    if (abs(coord(i,2)) <= (comp_placa / 4.0d0)) then
+                        fail(i,j) = 0
+                    end if
+                end if
+
+                dmgpar1 = dmgpar1 + fail(i,j) * vol * fac
+                dmgpar2 = dmgpar2 + vol * fac
+            end do
+
+            ! Calculation of the damage parameter
+            dmg(i,1) = 1.0d0 - dmgpar1 / dmgpar2
+        end if
+    end subroutine calcula_forca_dano_gpu
+
+    ! KERNEL 5: Integrador Temporal (Cinemática)
+    attributes(global) subroutine integra_cinematica_gpu(totnode, totint, dens, dt, pforce, bforce, vel, disp)
+        implicit none
+        integer, value :: totnode, totint
+        real(8), value :: dens, dt
+        real(8), device :: pforce(totnode, 2), bforce(totnode, 2)
+        real(8), device :: vel(totnode, 2), disp(totnode, 2)
+
+        integer :: i
+        real(8) :: acc1, acc2
+
+        ! Identifica a thread global e mapeia para o nó 'i'
+        i = (blockIdx%x - 1) * blockDim%x + threadIdx%x
+
+        if (i <= totnode) then
+            ! Calcula aceleração (Força Peridinâmica + Força de Corpo)
+            acc1 = (pforce(i,1) + bforce(i,1)) / dens
+            acc2 = (pforce(i,2) + bforce(i,2)) / dens
+
+            if (i <= totint) then
+                ! Nós Internos: Integração livre em X e Y
+                vel(i,1)  = vel(i,1) + acc1 * dt
+                vel(i,2)  = vel(i,2) + acc2 * dt
+                disp(i,1) = disp(i,1) + vel(i,1) * dt
+                disp(i,2) = disp(i,2) + vel(i,2) * dt
+            else
+                ! Nós de Contorno (Boundary): Integrar apenas X. 
+                ! A velocidade/deslocamento em Y é forçada pelas BCs!
+                vel(i,1)  = vel(i,1) + acc1 * dt
+                disp(i,1) = disp(i,1) + vel(i,1) * dt
+            end if
+        end if
+    end subroutine integra_cinematica_gpu
 
 end module kernels_peridinamica

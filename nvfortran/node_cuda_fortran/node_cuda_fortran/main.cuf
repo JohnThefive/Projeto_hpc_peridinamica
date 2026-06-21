@@ -1,4 +1,3 @@
-%%writefile main.cuf
 program main
   use cudafor
   use kernels_peridinamica
@@ -41,22 +40,45 @@ real*8 :: t1, t2
 real*8 :: tempo_total_sim_s, tempo_parte_a, tempo_parte_b, tempo_parte_c
 
 ! --- Variaveis para timer de Boundary conditions ---
-!   Parte A = chamada do kernel (host→device já feito antes do loop)
+!   Parte A = chamada do kernel (host->device já feito antes do loop)
 !   Parte B = cudaDeviceSynchronize (tempo real do kernel na GPU)
-!   Parte C = transferência device→host (D2H) de vel e disp
+!   Parte C = transferência device->host (D2H) de vel e disp
 !   Total   = A + B + C acumulado em todos os time steps
+
 real(8) :: t_bc_inicio_total, t_bc_fim_kernel, t_bc_fim_sync, t_bc_fim_d2h
 real(8) :: tempo_bc_kernel_s  = 0.0d0   ! Parte A: despacho do kernel
 real(8) :: tempo_bc_sync_s    = 0.0d0   ! Parte B: sincronização (execução GPU)
-real(8) :: tempo_bc_d2h_s     = 0.0d0   ! Parte C: cópia device→host
+real(8) :: tempo_bc_d2h_s     = 0.0d0   ! Parte C: cópia device->host
 real(8) :: tempo_total_bc_cuda_s = 0.0d0 ! Total acumulado (A+B+C)
 
 ! --- Variaveis de controle do Kernel BC ---
 integer :: n_bordas, ierr
 
-! --- Arrays de GPU para Boundary Conditions ---
+! --- Arrays de GPU para Boundary Conditions e Forças ---
+
 real(8), device, allocatable :: d_vel(:,:)
 real(8), device, allocatable :: d_disp(:,:)
+real(8), device, allocatable :: d_pforce(:,:)
+real(8), device, allocatable :: d_fncst(:,:)
+real(8), device, allocatable :: d_dmg(:,:)
+real(8), device, allocatable :: d_bforce(:,:)
+integer, device, allocatable :: d_fail(:,:)
+
+! --- Variaveis para Timer de Integração e I/O ---
+real(8) :: t_i_inicio, t_i_fim, tempo_total_integra_s = 0.0d0
+real(8) :: t_inicio_io, t_final_io, tempo_total_io_s = 0.0d0
+real(8) :: t_inicio_total, t_final_total, tempo_wall_clock = 0.0d0
+
+
+real(8) :: t_f_inicio, t_f_kernel, t_f_sync, t_f_d2h
+real(8) :: tempo_forca_kernel_s    = 0.0d0
+real(8) :: tempo_forca_sync_s      = 0.0d0
+real(8) :: tempo_forca_d2h_s       = 0.0d0
+real(8) :: tempo_total_forca_cuda_s = 0.0d0
+
+! ======================== INÍCIO DO CÓDIGO EXECUTÁVEL ========================
+
+t_inicio_total = omp_get_wtime() ! Inicia o relógio global absoluto
 
 pi = dacos(-1.0d0)
 
@@ -219,8 +241,8 @@ tottop = nnum
 block       = dim3(256, 1, 1)
 grid_familia = dim3((totnode + 255) / 256, 1, 1)
 
-!Alocação e transferência CPU→GPU dos arrays de família
-! ANTES das chamadas de kernel. 
+!Alocação e transferência CPU->GPU dos arrays de família
+! ANTES das chamadas de kernel.
 allocate(coord_d(totnode, 2))
 allocate(numfam_d(totnode))
 allocate(pointfam_d(totnode))
@@ -240,13 +262,12 @@ t1 = omp_get_wtime()
 call conta_vizinhos_gpu<<<grid_familia, block>>>(totnode, coord_d, delta, numfam_d)
 err_cuda = cudaDeviceSynchronize()
 
-! numfam no host é (totnode,1)
-numfam(1:totnode, 1) = numfam_d(1:totnode)
-
-! Tempo da parte A
+! Fim tempo Parte A (Kernel 1 GPU Count)
 t2 = omp_get_wtime()
 tempo_parte_a = t2 - t1
 
+! numfam no host é (totnode,1)
+numfam(1:totnode, 1) = numfam_d(1:totnode)
 
 ! Início contagem do tempo parte B (Scan na CPU)
 t1 = omp_get_wtime()
@@ -279,8 +300,6 @@ nodefam(1:10000000, 1) = nodefam_d(1:10000000)
 t2 = omp_get_wtime()
 tempo_parte_c = t2 - t1
 
-! Libera a memória de GPU dos arrays de família (não serão mais usados)
-deallocate(coord_d, numfam_d, pointfam_d, nodefam_d)
 
 ! Usando t_final_numfam_sim (variável declarada corretamente)
 
@@ -304,8 +323,6 @@ do i = 1,totnode
         elseif ((coord(i,2) > 0.0d0).and.(coord(cnode,2) < 0.0d0)) then
             if((dabs(coord(i,1)) - (crlength / 2.0d0)).le.1.0d-10) then
                 fail(i,j) = 0
-            ! [CORREÇÃO BUG 7] 1.0e-10 (single) corrigido para 1.0d-10 (double)
-            ! para consistência com o restante do código real*8.
             elseif((dabs(coord(cnode,1)) - (crlength / 2.0d0)).le.1.0d-10) then
                 fail(i,j) = 0
             endif
@@ -383,220 +400,142 @@ block    = dim3(256, 1, 1)
 n_bordas = tottop - totint
 grid     = dim3((n_bordas + block%x - 1) / block%x, 1, 1)
 
-! --- Alocação e inicialização dos arrays de GPU para BC ---
-allocate(d_vel(tottop, 2))
-allocate(d_disp(tottop, 2))
-d_vel(1:tottop, 1:2)  = vel(1:tottop, 1:2)
-d_disp(1:tottop, 1:2) = disp(1:tottop, 1:2)
+!Alocação dos vetores pra GPU 
 
-!Time integration
+allocate(d_vel(totnode, 2), d_disp(totnode, 2))
+allocate(d_pforce(totnode, 2), d_fncst(totnode, 2), d_dmg(totnode, 1))
+allocate(d_fail(totnode, maxfam), d_bforce(totnode, 2))
+
+d_vel(1:totnode, 1:2)    = vel(1:totnode, 1:2)
+d_disp(1:totnode, 1:2)   = disp(1:totnode, 1:2)
+d_bforce(1:totnode, 1:2) = bforce(1:totnode, 1:2)
+d_fncst(1:totnode, 1:2)  = fncst(1:totnode, 1:2)
+d_fail(1:totnode, :)     = fail(1:totnode, :)
+d_dmg(1:totnode, 1)      = dmg(1:totnode, 1)
+
 do tt = 1,nt
     write(*,*) 'tt = ', tt
     ctime = tt * dt
 
-    !______________________________DAQUI____________________________________________
-
-    ! --- PARTE A: despacho do kernel ---
+    ! KERNEL 3: APLICA AS CONDIÇÕES DE CONTORNO
     t_bc_inicio_total = omp_get_wtime()
-
     call aplica_bc_gpu<<<grid, block>>>(totint, totbottom, tottop, tt, dt, d_vel, d_disp)
-
-    t_bc_fim_kernel = omp_get_wtime()
-    tempo_bc_kernel_s = tempo_bc_kernel_s + (t_bc_fim_kernel - t_bc_inicio_total)
-
-    ! --- PARTE B: sincronização (aguarda a GPU terminar de executar o kernel) ---
     ierr = cudaDeviceSynchronize()
-
     t_bc_fim_sync = omp_get_wtime()
-    tempo_bc_sync_s = tempo_bc_sync_s + (t_bc_fim_sync - t_bc_fim_kernel)
+    tempo_total_bc_cuda_s = tempo_total_bc_cuda_s + (t_bc_fim_sync - t_bc_inicio_total)
 
-    ! --- PARTE C: transferência device→host ---
-    vel(1:tottop, 1:2)  = d_vel(1:tottop, 1:2)
-    disp(1:tottop, 1:2) = d_disp(1:tottop, 1:2)
+    ! KERNEL 4: CALCULA AS FORÇAS E O DANO
+    t_f_inicio = omp_get_wtime()
+    call calcula_forca_dano_gpu<<<grid_familia, block>>>(totnode, maxfam, coord_d, d_disp, d_pforce, &
+                                                         d_fail, d_dmg, numfam_d, pointfam_d, nodefam_d, &
+                                                         d_fncst, delta, radij, pi, bc, vol, scr0, length)
+    ierr = cudaDeviceSynchronize()
+    t_f_sync = omp_get_wtime()
+    tempo_total_forca_cuda_s = tempo_total_forca_cuda_s + (t_f_sync - t_f_inicio)
 
-    t_bc_fim_d2h = omp_get_wtime()
-    tempo_bc_d2h_s        = tempo_bc_d2h_s        + (t_bc_fim_d2h - t_bc_fim_sync)
-    tempo_total_bc_cuda_s = tempo_total_bc_cuda_s + (t_bc_fim_d2h - t_bc_inicio_total)
+    !  KERNEL 5: INTEGRADOR DA CINEMÁTICA
+    t_i_inicio = omp_get_wtime()
+    call integra_cinematica_gpu<<<grid_familia, block>>>(totnode, totint, dens, dt, d_pforce, d_bforce, d_vel, d_disp)
+    ierr = cudaDeviceSynchronize()
+    t_i_fim = omp_get_wtime()
+    tempo_total_integra_s = tempo_total_integra_s + (t_i_fim - t_i_inicio)
 
-    !______________________________ATÉ AQUI____________________________________________
+    ! Resgate dos dados para escrever os resultados
 
+    if (tt.eq.750 .or. tt.eq.1000 .or. tt.eq.1250) then
+        disp(1:totnode, 1:2) = d_disp(1:totnode, 1:2)
+        dmg(1:totnode, 1)    = d_dmg(1:totnode, 1)
 
-    !______________________________________AQUI__________________________________________
-
-    do i = 1,totnode
-        dmgpar1 = 0.0d0
-        dmgpar2 = 0.0d0
-        pforce(i,1) = 0.0d0
-        pforce(i,2) = 0.0d0
-        do j = 1,numfam(i,1)
-            cnode = nodefam(pointfam(i,1)+j-1,1)
-            idist = dsqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
-            nlength = dsqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + &
-                            (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
-            !Volume correction
-            if (idist.le.delta-radij) then
-                fac = 1.0d0
-            elseif (idist.le.delta+radij) then
-                fac = (delta+radij-idist)/(2.0d0*radij)
-            else
-                fac = 0.0d0
-            endif
-            if (dabs(coord(cnode,2) - coord(i,2)).le.1.0d-10) then
-                theta = 0.0d0
-            elseif (dabs(coord(cnode,1) - coord(i,1)).le.1.0d-10) then
-                theta = 90.0d0 * pi / 180.0d0
-            else
-                theta = datan(dabs(coord(cnode,2) - coord(i,2)) / dabs(coord(cnode,1) - coord(i,1)))
-            endif
-            !Determination of the surface correction between two material points
-            scx = (fncst(i,1) + fncst(cnode,1)) / 2.0d0
-            scy = (fncst(i,2) + fncst(cnode,2)) / 2.0d0
-            scr = 1.0d0 / (((dcos(theta))**2 / (scx)**2) + ((dsin(theta))**2 / (scy)**2))
-            scr = dsqrt(scr)
-
-            if (fail(i,j).eq.1) then
-                !Calculation of the peridynamic force in x and y directions
-                !acting on a material point i due to a material point j
-                dforce1 = bc * (nlength - idist) / idist * vol * scr * fac * &
-                          (coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1)) / nlength
-                dforce2 = bc * (nlength - idist) / idist * vol * scr * fac * &
-                          (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2)) / nlength
-            else
-                dforce1 = 0.0d0
-                dforce2 = 0.0d0
-            endif
-            pforce(i,1) = pforce(i,1) + dforce1
-            pforce(i,2) = pforce(i,2) + dforce2
-
-            !Definition of a no-fail zone
-            if (dabs((nlength - idist) / idist) > scr0) then
-                if (dabs(coord(i,2)).le.(length/4.0d0)) then
-                    fail(i,j) = 0
-                endif
-            endif
-
-            dmgpar1 = dmgpar1 + fail(i,j) * vol * fac
-            dmgpar2 = dmgpar2 + vol * fac
-        enddo
-        !Calculation of the damage parameter
-        dmg(i,1) = 1.0d0 - dmgpar1 / dmgpar2
-    enddo
-
-    !_________________________________________________ATÉ AQUI_____________________________________________________________
-
-    do i = 1,totint
-        !Calculation of acceleration of material point i
-        acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
-        acc(i,2) = (pforce(i,2) + bforce(i,2)) / dens
-        !Calculation of velocity of material point i
-        !by integrating the acceleration of material point i
-        vel(i,1) = vel(i,1) + acc(i,1) * dt
-        vel(i,2) = vel(i,2) + acc(i,2) * dt
-        !Calculation of displacement of material point i
-        !by integrating the velocity of material point i
-        disp(i,1) = disp(i,1) + vel(i,1) * dt
-        disp(i,2) = disp(i,2) + vel(i,2) * dt
-    enddo
-
-    do i = (totint+1), totbottom
-        acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
-        vel(i,1) = vel(i,1) + acc(i,1) * dt
-        disp(i,1) = disp(i,1) + vel(i,1) * dt
-    enddo
-
-    do i = (totbottom+1), tottop
-        acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
-        vel(i,1) = vel(i,1) + acc(i,1) * dt
-        disp(i,1) = disp(i,1) + vel(i,1) * dt
-    enddo
-
-    endtime(tt,1) = ctime
-
-    if (tt.eq.750) then
-        !printing results to an output file
-        open(26,file = 'coord_disp_pd_750_pwc_v20.txt')
-        do i = 1, totint
-            write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
-        enddo
-        close(26)
-    elseif (tt.eq.1000) then
-        open(26,file = 'coord_disp_pd_1000_pwc_v20.txt')
-        do i = 1, totint
-            write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
-        enddo
-        close(26)
-    elseif (tt.eq.1250) then
-        open(26,file = 'coord_disp_pd_1250_pwc_v20.txt')
-        do i = 1, totint
-            write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
-        enddo
-        close(26)
+        if (tt.eq.750) then
+            open(26,file = 'coord_disp_pd_750_pwc_v20.txt')
+            do i = 1, totint
+                write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
+            enddo
+            close(26)
+        elseif (tt.eq.1000) then
+            open(26,file = 'coord_disp_pd_1000_pwc_v20.txt')
+            do i = 1, totint
+                write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
+            enddo
+            close(26)
+        elseif (tt.eq.1250) then
+            open(26,file = 'coord_disp_pd_1250_pwc_v20.txt')
+            do i = 1, totint
+                write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
+            enddo
+            close(26)
+        endif
     endif
 
 enddo
 
 111 format(e12.5,3x,e12.5,3x,e12.5,3x,e12.5,3x,e12.5)
 
-!------------------------------- ESCREVENDO DOCUMENTO TXT --------------------------------------------!
-
-print *, "Gravando resultados no arquivo 'familia_resultados_cuda.txt'..."
+! --------------------------- Inicio da escrita dos resultados -------------------------------   
+t_inicio_io = omp_get_wtime()
 
 open(unit=26, file='familia_resultados_cuda.txt', status='replace')
 
-! Medição de tempo do BC
-write(26, *) "===================================================="
-write(26, *) "         METRICAS DE Boundary Conditions            "
-write(26, *) "===================================================="
-write(26, *) ""
-write(26, *) "--- CONDICOES DE CONTORNO (BC) ---"
-write(26, *) "--- TEMPOS ACUMULADOS (", nt, " time steps) ---"
-write(26, '(A, F12.6, A)') "Parte A - Despacho do kernel    : ", tempo_bc_kernel_s,    " s"
-write(26, '(A, F12.6, A)') "Parte B - Sincronizacao GPU     : ", tempo_bc_sync_s,      " s"
-write(26, '(A, F12.6, A)') "Parte C - Transf. device->host  : ", tempo_bc_d2h_s,       " s"
-write(26, '(A, F12.6, A)') "TOTAL BC                        : ", tempo_total_bc_cuda_s," s"
-write(26, *) "===================================================="
-write(26, *) ""
-! Escreve os tempos medidos (etapas A, B e C)
-write(26, *) "===================================================="
-write(26, *) "RELATORIO DE DESEMPENHO (CUDA FORTRAN)"
-write(26, *) "===================================================="
-write(26, '(A, F12.6, A)') "Tempo Parte A (GPU Count): ", tempo_parte_a, " s"
-write(26, '(A, F12.6, A)') "Tempo Parte B (CPU Scan) : ", tempo_parte_b, " s"
-write(26, '(A, F12.6, A)') "Tempo Parte C (GPU Fill) : ", tempo_parte_c, " s"
-write(26, *) "-"
-write(26, '(A, F12.6, A)') "Tempo TOTAL da Busca     : ", tempo_total_sim_s, " s"
-write(26, *) ""
-
-! Escreve o POINTFAM
 write(26, *) "===================================================="
 write(26, *) "INDICE DOS PONTOS DE CADA FAMILIA (POINTFAM)"
+write(26, *) "Formato: (Indice do Ponto, Indice de Inicio em NODEFAM)"
 write(26, *) "===================================================="
 do i = 1, totnode
-    write(26, '(I10, A, I10)') i, " , ", pointfam(i,1)
+    write(26, '(I10, A, I10)') i, " , ", pointfam(i, 1)
 enddo
 
 write(26, *) ""
-
-! Escreve o NODEFAM
 write(26, *) "===================================================="
 write(26, *) "PONTOS QUE COMPOEM A FAMILIA (NODEFAM)"
+write(26, *) "Formato: Familia do Ponto X (Total: Y)"
+write(26, *) "         [lista de pontos j]"
 write(26, *) "===================================================="
 do i = 1, totnode
     write(26, '(A, I10, A, I6, A)') "Familia do Ponto ", i, " (Total: ", numfam(i,1), ")"
-
+    
     if (numfam(i,1) > 0) then
         do j = 1, numfam(i,1)
             write(26, '(I10, 1x)', advance='no') nodefam(pointfam(i,1) + j - 1, 1)
         enddo
-        write(26, *) ! Quebra de linha após listar todos os vizinhos
+        write(26, *) 
     else
         write(26, '(A)') "  (Familia vazia)"
     endif
-    write(26, *) ! Linha em branco extra para separar os pontos
+    write(26, *) 
 enddo
 
-close(26)
-print *, "Arquivo gravado com sucesso!"
+! Fechamos os relógios de I/O e Total antes do encerramento do arquivo
+t_final_io = omp_get_wtime()
+tempo_total_io_s = t_final_io - t_inicio_io
 
+t_final_total = omp_get_wtime()
+tempo_wall_clock = t_final_total - t_inicio_total
+
+! Escrevemos o bloco consolidado de performance no fim do log (Padrão OpenMP)
+write(26, *) ""
+write(26, *) "===== RESUMO DE PERFORMANCE (CUDA FORTRAN) ====="
+write(26, '(A, F12.6, A)') "Tempo Total da Topologia (Fase 1+2+3): ", tempo_total_sim_s, " s"
+write(26, '(A, F12.6, A)') "  -> Parte 1 (GPU Count):                ", tempo_parte_a, " s"
+write(26, '(A, F12.6, A)') "  -> Parte 2 (CPU Scan/Prefix Sum):      ", tempo_parte_b, " s"
+write(26, '(A, F12.6, A)') "  -> Parte 3 (GPU Fill nodefam):         ", tempo_parte_c, " s"
+write(26, '(A, F12.6, A)') "Tempo das Condicoes (Kernel 3):        ", tempo_total_bc_cuda_s, " s"
+write(26, '(A, F12.6, A)') "Tempo de Forcas/Dano (Kernel 4):       ", tempo_total_forca_cuda_s, " s"
+write(26, '(A, F12.6, A)') "Tempo do Integrador (Kernel 5):        ", tempo_total_integra_s, " s"
+write(26, '(A, F12.6, A)') "Tempo de Escrita (I/O):                ", tempo_total_io_s, " s"
+write(26, '(A, F12.6, A)') "Tempo Total do Programa (Wall-clock):  ", tempo_wall_clock, " s"
+write(26, *) "--------------------------------------------------"
+if (tempo_wall_clock > 0.0d0) then
+    write(26, '(A, F12.2, A)') "Impacto das Forcas no Tempo Total:     ", (tempo_total_forca_cuda_s / tempo_wall_clock) * 100.0d0, " %"
+endif
+write(26, *) "================================================"
+
+close(26)
+
+print *, "Simulacao finalizada com sucesso!"
+print *, "O relatorio de performance foi salvo no final de 'familia_resultados_cuda.txt'."
 
 end program main
+
+
+
+
