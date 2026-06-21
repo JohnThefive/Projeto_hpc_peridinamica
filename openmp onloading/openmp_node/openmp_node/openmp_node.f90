@@ -29,7 +29,7 @@ real *8 acc(totnode,2), massvec(totnode,2), enddisp(nt,1), endtime(nt,1), dmg(to
 integer numfam(totnode), pointfam(totnode)
 integer nodefam(10000000,1), fail(totnode,maxfam)
 
-! TESTANDO A FUNÇÃO DO OPENMP
+
 integer :: kount, scan_sum  ! 'scan_sum' é a variável de acúmulo
 real *8 :: start_time, end_time
 real *8 :: t_parte1, t_parte2, t_parte3, tempo_total_sim_s1
@@ -578,7 +578,6 @@ write(26, *) "============================================"
 
 close(26)
 
-print *, "Simulacao finalizada com sucesso!"
 print *, "O relatorio de performance foi salvo no final de 'familia_resultados_onloading.txt'."
 
 111 format(e12.5,3x,e12.5,3x,e12.5,3x,e12.5,3x,e12.5)

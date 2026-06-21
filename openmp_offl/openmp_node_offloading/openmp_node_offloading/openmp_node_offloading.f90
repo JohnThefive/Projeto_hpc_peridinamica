@@ -37,6 +37,12 @@ real *8 :: t_parte1, t_parte2, t_parte3, tempo_total_sim_s1
 !declarações para registro de tempo (boundary conditions)
 real*8  :: t_inicio_bc, t_final_bc, tempo_total_bc_gpu_s
 
+! Declarações para registro de tempo (Forças e Dano na GPU)
+real*8  :: t_inicio_forca, t_final_forca, tempo_total_forca_s
+
+real*8 :: t_inicio_io, t_final_io, tempo_total_io_s
+real*8 :: t_inicio_total, t_final_total, tempo_wall_clock
+
 pi = dacos(-1.0d0)
 
 do i = 1, totnode 
@@ -401,48 +407,56 @@ do i = 1,totnode
     disp(i,2) = 0.0d0         
 enddo
 
-! Inicializa o acumulador de tempo das BCs
+! Inicializa os acumuladores de tempo antes da integração
 tempo_total_bc_gpu_s = 0.0d0
+tempo_total_forca_s  = 0.0d0
 
-!Time integration
+
+
+! Aloquei 'vel' e 'disp' na GPU e depois eles voltam (tofrom)
+!$omp target data map(tofrom: vel(1:totnode,:), disp(1:totnode,:))
+
+! Time integration 
 do tt = 1,nt
     write(*,*) 'tt = ', tt
-	ctime = tt * dt
+    ctime = tt * dt
 
-!______________________________DAQUI____________________________________________
-
-    !Application of boundary conditions at the top and bottom edges
-
-    ! captura de tempo inicial 
     t_inicio_bc = omp_get_wtime()
     
-    ! deslocar os dados pra GPU 
-    !$omp target data map(tofrom: vel(totint+1:tottop,:), disp(totint+1:tottop,:))
+! ---------------------------------------------------------------------------------------- Daqui ---------------------------------------------------------
+    !$omp target teams distribute parallel do
+    do i = (totint+1), totbottom
+        vel(i,2) = -20.0d0
+        disp(i,2) = -20.0d0 * tt * dt
+    enddo
+    !$omp end target teams distribute parallel do
     
-      !$omp target teams distribute parallel do
-      do i = (totint+1), totbottom
-          vel(i,2) = -20.0d0
-          disp(i,2) = -20.0d0 * tt * dt
-      enddo
-      !$omp end target teams distribute parallel do
+    !$omp target teams distribute parallel do
+    do i = (totbottom+1), tottop
+        vel(i,2) = 20.0d0
+        disp(i,2) = 20.0d0 * tt * dt
+    enddo   
+    !$omp end target teams distribute parallel do
     
-      !$omp target teams distribute parallel do
-      do i = (totbottom+1), tottop
-          vel(i,2) = 20.0d0
-          disp(i,2) = 20.0d0 * tt * dt
-      enddo   
-      !$omp end target teams distribute parallel do
-      
-    !$omp end target data
-    
-    ! Agora capturamos o tempo final
     t_final_bc = omp_get_wtime()
     tempo_total_bc_gpu_s = tempo_total_bc_gpu_s + (t_final_bc - t_inicio_bc)
-      
     
 !______________________________ATÉ AQUI ____________________________________________ 
+    
+    
 
 !______________________________________AQUI__________________________________________
+    
+    t_inicio_forca = omp_get_wtime()
+    
+    ! OMP TARGET: Diz para executar na GPU
+    ! TEAMS DISTRIBUTE PARALLEL DO: Distribui o laço 'i' pelos núcleos da placa de vídeo
+    
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO DEFAULT(SHARED) &
+    !$OMP PRIVATE(j, dmgpar1, dmgpar2, cnode, idist, nlength, fac, &
+    !$OMP         theta, scx, scy, scr, dforce1, dforce2)
+    
+    
     do i = 1,totnode
         dmgpar1 = 0.0d0
         dmgpar2 = 0.0d0
@@ -502,6 +516,11 @@ do tt = 1,nt
         !Calculation of the damage parameter
         dmg(i,1) = 1.0d0 - dmgpar1 / dmgpar2
     enddo
+    
+    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+    
+    t_final_forca = omp_get_wtime() 
+    tempo_total_forca_s = tempo_total_forca_s + (t_final_forca - t_inicio_forca)
     ! _________________________________________________ATÉ AQUI_____________________________________________________________ 
     
     do i = 1,totint
@@ -531,82 +550,99 @@ do tt = 1,nt
     enddo
                
     endtime(tt,1) = ctime
-
-    if (tt.eq.750) then
-        open(26,file = 'coord_disp_pd_750_pwc_v20.txt')
-        do i = 1, totint
-            write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
-        enddo
-        close(26)
-    elseif (tt.eq.1000) then
-        open(26,file = 'coord_disp_pd_1000_pwc_v20.txt')
-        do i = 1, totint
-            write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
-        enddo
-        close(26)
-    elseif (tt.eq.1250) then
-        open(26,file = 'coord_disp_pd_1250_pwc_v20.txt')
-        do i = 1, totint
-            write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
-        enddo
-        close(26)
+    
+    if (tt.eq.750 .or. tt.eq.1000 .or. tt.eq.1250) then
+        ! Trazemos o array de deslocamento e dano da GPU para a CPU
+        !$omp target update from(disp(1:totnode,:), dmg(1:totnode,:))
+        
+      if (tt.eq.750) then
+          open(26,file = 'coord_disp_pd_750_pwc_v20.txt')
+          do i = 1, totint
+              write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
+          enddo
+          close(26)
+      elseif (tt.eq.1000) then
+          open(26,file = 'coord_disp_pd_1000_pwc_v20.txt')
+          do i = 1, totint
+              write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
+          enddo
+          close(26)
+      elseif (tt.eq.1250) then
+          open(26,file = 'coord_disp_pd_1250_pwc_v20.txt')
+          do i = 1, totint
+              write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
+          enddo
+          close(26)
+      endif
     endif
 
 enddo
 
+!$omp end target data
+
 111 format(e12.5,3x,e12.5,3x,e12.5,3x,e12.5,3x,e12.5)
 
-    ! ====================================================================================================
-    ! ESCRITA DO ARQUIVO DE RESULTADOS GERAIS
-    ! ====================================================================================================
-    open(unit=26, file='familia_resultados_offloading.txt', status='replace')
-    
-    write(26, *) "===================================================="
-    write(26, *) "              METRICAS DE PERFORMANCE               "
-    write(26, *) "===================================================="
-    write(26, *) ""
-    write(26, *) "--- CONDICOES DE CONTORNO (BC) ---"
-    write(26, '(A, F12.6, A)') "Tempo Total Acumulado nas BC     : ", tempo_total_bc_gpu_s, " segundos"
-    write(26, '(A, F12.6, A)') "Tempo Medio de BC por Time Step  : ", tempo_total_bc_gpu_s / real(nt, 8), " segundos"
-    
-    ! Usando a variável consistente tempo_total_sim_s1 para o cálculo do impacto
-    if (tempo_total_sim_s1 > 0.0d0) then
-        write(26, '(A, F12.2, A)') "Impacto das BCs no Tempo Total   : ", (tempo_total_bc_gpu_s / tempo_total_sim_s1) * 100.0d0, " %"
-    endif
-    write(26, *) "===================================================="
-    write(26, *) ""
+   t_inicio_io = omp_get_wtime()
 
-    write(26, '(A, F12.6, A)') "Tempo de execucao do CALCULO total: ", tempo_total_sim_s1, " segundos"
-    write(26, '(A, F12.6, A)') "Parte 1 - GPU loop numfam + transfer: ", t_parte1, " segundos"
-    write(26, '(A, F12.6, A)') "Parte 2 - Serial pointfam : ", t_parte2, " segundos"
-    write(26, '(A, F12.6, A)') "Parte 3 - GPU loop nodefam: ", t_parte3, " segundos"
-    
-    write(26, *) ""
+    open(unit=26, file='familia_resultados_offloading.txt', status='replace')
+
     write(26, *) "===================================================="
     write(26, *) "INDICE DOS PONTOS DE CADA FAMILIA (POINTFAM)"
+    write(26, *) "Formato: (Indice do Ponto, Indice de Inicio em NODEFAM)"
     write(26, *) "===================================================="
     do i = 1, totnode
-        write(26, '(I10, A, I10)') i, " , ", pointfam(i,1)  
+        write(26, '(I10, A, I10)') i, " , ", pointfam(i, 1)
     enddo
 
     write(26, *) ""
     write(26, *) "===================================================="
     write(26, *) "PONTOS QUE COMPOEM A FAMILIA (NODEFAM)"
+    write(26, *) "Formato: Familia do Ponto X (Total: Y)"
+    write(26, *) "         [lista de pontos j]"
     write(26, *) "===================================================="
     do i = 1, totnode
-    write(26, '(A, I10, A, I6, A)') "Familia do Ponto ", i, " (Total: ", numfam(i,1), ")"
-    if (numfam(i,1) > 0) then
-        do j = 1, numfam(i,1)
-            write(26, '(I10, 1x)', advance='no') nodefam(pointfam(i,1) + j - 1, 1)
-        enddo
-        write(26, *)
-    else
-        write(26, '(A)') "  (Familia vazia)"
-    endif
-    write(26, *)
+        write(26, '(A, I10, A, I6, A)') "Familia do Ponto ", i, " (Total: ", numfam(i,1), ")"
+        
+        if (numfam(i,1) > 0) then
+            do j = 1, numfam(i,1)
+                write(26, '(I10, 1x)', advance='no') nodefam(pointfam(i,1) + j - 1, 1)
+            enddo
+            write(26, *) 
+        else
+            write(26, '(A)') "  (Familia vazia)"
+        endif
+        write(26, *) 
     enddo
-    
+
+    ! Fechamos os relógios de I/O e Total antes do encerramento do arquivo
+    t_final_io = omp_get_wtime()
+    tempo_total_io_s = t_final_io - t_inicio_io
+
+    t_final_total = omp_get_wtime()
+    tempo_wall_clock = t_final_total - t_inicio_total
+
+    ! Escrevemos o bloco consolidado de performance no fim do log
+    write(26, *) ""
+    write(26, *) "===== RESUMO DE PERFORMANCE (OFFLOADING GPU) ====="
+    write(26, '(A, F12.6, A)') "Tempo Total da Topologia (Fase 1+2+3): ", tempo_total_sim_s1, " s"
+    write(26, '(A, F12.6, A)') "  -> Parte 1 (GPU numfam + transfer):    ", t_parte1, " s"
+    write(26, '(A, F12.6, A)') "  -> Parte 2 (Serial CPU pointfam):      ", t_parte2, " s"
+    write(26, '(A, F12.6, A)') "  -> Parte 3 (GPU nodefam + transfer):   ", t_parte3, " s"
+    write(26, '(A, F12.6, A)') "Tempo das Condicoes (BC na GPU):       ", tempo_total_bc_gpu_s, " s"
+    write(26, '(A, F12.6, A)') "Tempo de Forcas/Dano (GPU):            ", tempo_total_forca_s, " s"
+    write(26, '(A, F12.6, A)') "Tempo de Escrita (I/O):                ", tempo_total_io_s, " s"
+    write(26, '(A, F12.6, A)') "Tempo Total do Programa (Wall-clock):  ", tempo_wall_clock, " s"
+    write(26, *) "--------------------------------------------------"
+    if (tempo_wall_clock > 0.0d0) then
+        write(26, '(A, F12.2, A)') "Impacto das BCs no Tempo Total:        ", (tempo_total_bc_gpu_s / tempo_wall_clock) * 100.0d0, " %"
+        write(26, '(A, F12.2, A)') "Impacto das Forcas no Tempo Total:     ", (tempo_total_forca_s / tempo_wall_clock) * 100.0d0, " %"
+    endif
+    write(26, *) "=================================================="
+
     close(26)
+
+    print *, "Simulacao finalizada com sucesso!"
+    print *, "O relatorio de performance foi salvo no final de 'familia_resultados_offloading.txt'."
 
 
 end program openmp_node_offloading
