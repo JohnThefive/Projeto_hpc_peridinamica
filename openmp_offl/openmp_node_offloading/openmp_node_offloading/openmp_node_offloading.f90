@@ -1,588 +1,427 @@
 program openmp_node_offloading 
     
-use OMP_LIB
-implicit none
+    use omp_lib
+    implicit none
 
-! !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO ... para fazer offloading de um loop
+    ! =========================================================================
+    ! PARÂMETROS E CONSTANTES
+    ! =========================================================================
+    integer, parameter :: dp = kind(1.0d0)
+    integer, parameter :: ndivx = 500
+    integer, parameter :: ndivy = 500
+    integer, parameter :: nbnd = 3
+    integer, parameter :: totnode = ndivx * (ndivy + 2 * nbnd) 
+    integer, parameter :: nt = 1250
+    integer, parameter :: maxfam = 100
 
-integer ndivx, ndivy, totnode, nt, maxfam, nnum, cnode, i, j, tt, nbnd, totint, totbottom, tottop
-!ndivx: Number of divisions in x direction - except boundary region
-parameter(ndivx = 500)
-!ndivy: Number of divisions in y direction - except boundary region
-parameter(ndivy = 500)
-!nbnd: Number of divisions in the boundary region
-parameter(nbnd = 3)
-!totnode: Total number of material points
-parameter (totnode = ndivx*(ndivy + 2 * nbnd)) 
-!nt: Total number of time step
-parameter(nt = 1250)
-!maxfam: Maximum number of material points inside a horizon of a material point
-parameter(maxfam = 100)
+    ! =========================================================================
+    ! DECLARAÇÕES DE VARIÁVEIS
+    ! =========================================================================
+    real(dp) :: length, width, dx, delta, thick, dens, emod
+    real(dp) :: area, vol, bc  
+    real(dp) :: sedload1, sedload2, dt, totime, ctime, idist, fac
+    real(dp) :: radij, nlength, dforce1, dforce2 
+    real(dp) :: crlength, pi, dmgpar1, dmgpar2, theta, scx, scy, scr
+    real(dp) :: scr0
 
-real *8 length,width, dx, delta, thick, dens, emod, pratio, area, vol, bc  
-real *8 sedload1, sedload2, dt, totime, ctime, idist, fac, radij, nlength, dforce1, dforce2 
-real *8 crlength, scr0, pi, tmpdx, tmpvol, tmpcx, tmpcy, tmpux, tmpuy, dmgpar1, dmgpar2, theta 
-real *8 scx, scy, scr
+    integer  :: nnum, cnode, i, j, tt, totint, totbottom, tottop
+    integer  :: kount, total_family_size
 
-real *8 coord(totnode,2), pforce(totnode,2), pforceold(totnode,2), bforce(totnode,2), stendens(totnode,2)
-real *8 fncst(totnode,2), disp(totnode,2), vel(totnode,2), velhalfold(totnode,2), velhalf(totnode,2)
-real *8 acc(totnode,2), massvec(totnode,2), enddisp(nt,1), endtime(nt,1), dmg(totnode,1)
-integer numfam(totnode,1), pointfam(totnode,1), nodefam(10000000,1), fail(totnode,maxfam)
+    ! Arrays 1D limpos (Removido o antipadrão Nx1)
+    integer  :: numfam(totnode)
+    integer  :: pointfam(totnode)
+    real(dp) :: dmg(totnode)
 
-! declarações para registro de tempo 
-integer :: kount
-real *8 :: start_time, end_time,t_start, t_end
-real *8 :: t_parte1, t_parte2, t_parte3, tempo_total_sim_s1
+    ! Arrays dinâmicos alocados em tempo de execução
+    integer, allocatable :: nodefam(:)
 
-!declarações para registro de tempo (boundary conditions)
-real*8  :: t_inicio_bc, t_final_bc, tempo_total_bc_gpu_s
+    ! Matrizes padrão
+    real(dp) :: coord(totnode,2), pforce(totnode,2), bforce(totnode,2), stendens(totnode,2)
+    real(dp) :: fncst(totnode,2), disp(totnode,2), vel(totnode,2), acc(totnode,2)
+    integer  :: fail(totnode,maxfam)
 
-! Declarações para registro de tempo (Forças e Dano na GPU)
-real*8  :: t_inicio_forca, t_final_forca, tempo_total_forca_s
+    ! Declarações para registro de tempo 
+    real(dp) :: start_time, end_time, t_start, t_end
+    real(dp) :: t_parte1, t_parte2, t_parte3, tempo_total_sim_s1
+    real(dp) :: t_inicio_bc, t_final_bc, tempo_total_bc_gpu_s = 0.0_dp
+    real(dp) :: t_inicio_forca, t_final_forca, tempo_total_forca_s = 0.0_dp
+    real(dp) :: t_inicio_io, t_final_io, tempo_total_io_s = 0.0_dp
+    real(dp) :: t_inicio_total, t_final_total, tempo_wall_clock = 0.0_dp
 
-real*8 :: t_inicio_io, t_final_io, tempo_total_io_s
-real*8 :: t_inicio_total, t_final_total, tempo_wall_clock
+    ! ======================== INÍCIO DO CÓDIGO EXECUTÁVEL ========================
 
-pi = dacos(-1.0d0)
+    t_inicio_total = omp_get_wtime()
+    pi = acos(-1.0_dp)
 
-do i = 1, totnode 
-    !coord: Material point locations, 1:x-coord, 2:y-coord
-	coord(i,1) = 0.0d0
-	coord(i,2) = 0.0d0
-    !numfam: Number of family members of each material point
-	numfam(i,1) = 0
-    !pointfam: index array to find the family members in nodefam array
-	pointfam(i,1) = 0
-    !pforce: total peridynamic force acting on a material point, 1:x-coord, 2:y-coord
-	pforce(i,1) = 0.0d0
-	pforce(i,2) = 0.0d0
-    !pforceold: total peridynamic force acting on a material point in the previous time step
-    !1:x-coord, 2:y-coord
-	pforceold(i,1) = 0.0d0
-	pforceold(i,2) = 0.0d0
-    !bforce: body load acting on a material point, 1:x-coord, 2:y-coord
-	bforce(i,1) = 0.0d0
-	bforce(i,2) = 0.0d0
-    !stendens: strain energy of a material point, 1:loading 1, 2:loading 2
-	stendens(i,1) = 0.0d0
-	stendens(i,2) = 0.0d0
-    !fncst: surface correction factors of a material point, 1:loading 1, 2:loading 2
-	fncst(i,1) = 1.0d0 
-	fncst(i,2) = 1.0d0  
-    !disp: displacement of a material point, 1:x-coord, 2:y-coord
-	disp(i,1) = 0.0d0
-	disp(i,2) = 0.0d0
-    !vel: velocity of a material point, 1:x-coord, 2:y-coord
-	vel(i,1) = 0.0d0
-	vel(i,2) = 0.0d0
-	velhalfold(i,1) = 0.0d0
-	velhalfold(i,2) = 0.0d0
-	velhalf(i,1) = 0.0d0
-	velhalf(i,2) = 0.0d0
-    !acc: acceleration of a material point, 1:x-coord, 2:y-coord 
-	acc(i,1) = 0.0d0
-	acc(i,2) = 0.0d0
-    !massvec: massvector for adaptive dynamic relaxation, 1:x-coord, 2:y-coord
-	massvec(i,1) = 0.0d0
-	massvec(i,2) = 0.0d0
-    !fail: Failure array
-	do j = 1, maxfam
-		fail(i,j) = 0
+    ! Inicialização Limpa
+    numfam   = 0
+    pointfam = 0
+    coord    = 0.0_dp
+    pforce   = 0.0_dp
+    bforce   = 0.0_dp
+    stendens = 0.0_dp
+    fncst    = 1.0_dp 
+    disp     = 0.0_dp
+    vel      = 0.0_dp
+    acc      = 0.0_dp
+    dmg      = 0.0_dp
+    fail     = 1 ! Inicializa a falha em 1 diretamente
+
+    ! Propriedades Físicas e Geométricas
+    length   = 0.05_dp
+    width    = 0.05_dp
+    dx       = length / ndivx
+    delta    = 3.015_dp * dx
+    thick    = dx
+    dens     = 8000.0_dp
+    emod     = 192.0d9
+    area     = dx * dx
+    vol      = area * dx
+    bc       = 9.0_dp * emod / (pi * thick * (delta**3))
+    sedload1 = 9.0_dp / 16.0_dp * emod * 1.0d-6   
+    sedload2 = 9.0_dp / 16.0_dp * emod * 1.0d-6
+    dt       = 0.8_dp * sqrt(2.0_dp * dens * dx / (pi * delta**2 * dx * bc))
+    totime   = nt * dt
+    ctime    = 0.0_dp
+    radij    = dx / 2.0_dp
+    crlength = 0.01_dp
+    scr0     = 0.04472_dp
+    nnum     = 0
+
+    ! Geração dos nós - Região Interna
+    do i = 1, ndivy
+        do j = 1, ndivx
+            nnum = nnum + 1
+            coord(nnum,1) = (-1.0_dp * length / 2.0_dp) + (dx / 2.0_dp) + (j-1) * dx
+            coord(nnum,2) = (-1.0_dp * width / 2.0_dp) + (dx / 2.0_dp) + (i-1) * dx
+        enddo
     enddo
-    !dmg: Damage of a material point
-	dmg(i,1) = 0.0d0
-enddo
+    totint = nnum
 
-do i = 1, 1000000
-    !nodefam: array containing family members of all material points
-	nodefam(i,1) = 0
-enddo
-
-!length: Total length of the plate
-length = 0.05d0
-!width: Total width of the plate
-width = 0.05d0
-!dx: Spacing between material points
-dx = length / ndivx
-!delta: Horizon
-delta = 3.015 * dx
-!thick: Thickness of the plate
-thick = dx
-!dens: Density
-dens = 8000.0d0
-!emod: Elastic modulus
-emod = 192.0d9
-!pratio12 = Poisson's ratio
-pratio = 1.0d0 / 3.0d0
-!area: Cross-sectional area
-area = dx * dx
-!vol: Volume of a material point
-vol = area * dx
-!bc: Bond constant 
-bc = 9.0d0 * emod / (pi * thick * (delta**3))
-!sedload1: Strain energy density for the first loading
-sedload1 = 9.0d0 / 16.0d0 * emod * 1.0d-6   
-!sedload2: Strain energy density for the second loading
-sedload2 = 9.0d0 / 16.0d0 * emod * 1.0d-6
-!dt: Time interval
-dt = 0.8d0 * dsqrt(2.0d0*dens*dx/(pi*delta**2*dx*bc))
-!totime: Total time
-totime = nt * dt
-!ctime: Current time
-ctime = 0.0d0
-!idist: Initial distance
-idist = 0.0d0
-do i = 1, nt
-	enddisp(i,1) = 0.0d0
-	endtime(i,1) = 0.0d0
-enddo
-!fac: Volume correction factor
-fac = 0.0d0
-!radij: Material point radius
-radij = dx / 2.0d0
-!nnum: Material point number
-nnum = 0
-!cnode: Current material point
-cnode = 0
-!Length of deformed bond
-nlength  = 0.0d0
-!dforce1: x component of the PD force between two material points
-dforce1 = 0.0d0
-!dforce1: y component of the PD force between two material points
-dforce2 = 0.0d0
-!crlength: Crack length
-crlength = 0.01d0
-!scr0: Critical stretch
-scr0 = 0.04472d0
-
-!Initialization of fail flag array
-!1 means no failure, 0 means failure of the PD bond
-do i = 1,totnode
-	do j = 1,maxfam
-		fail(i,j) = 1
+    ! Geração dos nós - Borda Inferior
+    do i = 1, nbnd
+        do j = 1, ndivx
+            nnum = nnum + 1
+            coord(nnum,1) = -1.0_dp / 2.0_dp * length + (dx / 2.0_dp) + (j - 1) * dx
+            coord(nnum,2) = -1.0_dp / 2.0_dp * width - (dx / 2.0_dp) - (i - 1) * dx
+        enddo
     enddo
-enddo
+    totbottom = nnum
 
-!Specification of the locations of material points
-!Material points of the internal region
-do i = 1,ndivy
-    do j = 1,ndivx
-        nnum = nnum + 1
-        coord(nnum,1) = (-1.0d0 * length / 2.0d0) + (dx / 2.0d0) + (j-1) * dx
-        coord(nnum,2) = (-1.0d0 * width / 2.0d0) + (dx / 2.0d0) + (i-1) * dx
+    ! Geração dos nós - Borda Superior
+    do i = 1, nbnd
+        do j = 1, ndivx
+            nnum = nnum + 1
+            coord(nnum,1) = -1.0_dp / 2.0_dp * length + (dx / 2.0_dp) + (j - 1) * dx
+            coord(nnum,2) =  1.0_dp / 2.0_dp * width + (dx / 2.0_dp) + (i - 1) * dx
+        enddo
     enddo
-enddo
-
-totint = nnum
-
-!Material points of the boundary region - bottom
-do i = 1,nbnd
-    do j = 1,ndivx
-        nnum = nnum + 1
-        coord(nnum,1) = -1.0d0 /2.0d0 * length + (dx / 2.0d0) + (j - 1) * dx
-        coord(nnum,2) = -1.0d0 /2.0d0 * width - (dx / 2.0d0) - (i - 1) * dx
-    enddo
-enddo
-
-totbottom = nnum
-
-!Material points of the boundary region - top
-do i = 1,nbnd
-    do j = 1,ndivx
-        nnum = nnum + 1
-        coord(nnum,1) = -1.0d0 /2.0d0 * length + (dx / 2.0d0) + (j - 1) * dx
-        coord(nnum,2) = 1.0d0 /2.0d0 * width + (dx / 2.0d0) + (i - 1) * dx
-    enddo
-enddo
-
-tottop = nnum
-
-! /// trabalho começa aqui ///
-
-!T_Inicio = Ler o tempo aqui
-t_start = omp_get_wtime()
-
-!Determination of material points inside the horizon of each material point
-
-! Precisamos criar uma area para enviar dados para a GPU 
-
-!    - MAP(TO:...) copia dados da CPU para a GPU (só ida)
-!    - MAP(ALLOC:...) aloca espaço na GPU, mas não copia nada
-!    - MAP(FROM:...) copia dados da GPU para a CPU (só volta)
-
-!$OMP TARGET DATA MAP(TO: coord(1:totnode,:), delta) &
-!$OMP& MAP(ALLOC: numfam(1:totnode,:), pointfam(1:totnode,:)) &
-!$OMP& MAP(FROM: nodefam(1:10000000,:))
+    tottop = nnum
 
 
-! "TARGET" alvo da GPU 
-! "TEAMS DISTRIBUTE PARALLEL DO" Parallel Do da GPU
+    ! ======================== TOPOLOGIA (GPU OFFLOADING) ========================
+    ! Mapeia apenas coord e delta para a GPU nesta fase
+    !$OMP TARGET DATA MAP(TO: coord, delta)
+    
+    t_start = omp_get_wtime() 
 
-! PROCESSAMENTO NA GPU
-t_start = omp_get_wtime() !maracador de tempo no incio da parte paralela.
-
-   !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO PRIVATE(j, idist)
+    ! PARTE 1 (GPU): Conta os vizinhos
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO PRIVATE(j, idist) MAP(FROM: numfam)
     do i = 1, totnode
-        numfam(i,1) = 0
+        numfam(i) = 0
         do j = 1, totnode
-            if (i .ne. j) then
-                idist = dsqrt((coord(j,1) - coord(i,1))**2 + (coord(j,2) - coord(i,2))**2)
+            if (i /= j) then
+                idist = sqrt((coord(j,1) - coord(i,1))**2 + (coord(j,2) - coord(i,2))**2)
                 if (idist <= delta) then
-                    numfam(i,1) = numfam(i,1) + 1
+                    numfam(i) = numfam(i) + 1
                 endif
             endif
         enddo
     enddo
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
     
-    ! sincronizando GPU -> CPU para parte serial 
-    !'UPDATE FROM' copia o array da gpu para a cpu .
-    
-    ! 1.2 Trazer resultado para CPU (Gargalo de transferência)
-    
-    !$OMP TARGET UPDATE FROM(numfam(1:totnode,:))
-    
-    t_end = omp_get_wtime() !marcador de tempo do fim da parte paralela
+    t_end = omp_get_wtime() 
     t_parte1 = t_end - t_start 
     
-    ! PARTE 2 SERIAL 
+    ! PARTE 2 (CPU - Serial): Scan / Prefix Sum
+    t_start = omp_get_wtime() 
     
-    t_start = omp_get_wtime() ! marcador de tempo no inicio da parte serial.
-    
-    pointfam(1,1) = 1
+    pointfam(1) = 1
     do i = 2, totnode
-        pointfam(i,1) = pointfam(i-1,1) + numfam(i-1,1)
+        pointfam(i) = pointfam(i-1) + numfam(i-1)
     enddo
     
     t_end = omp_get_wtime()
     t_parte2 = t_end - t_start
     
-    ! agora vamos fazer o caminho CPU -> GPU 
-    !'UPDATE TO' copia o array da CPU para a GPU.
+    ! Alocação dinâmica de nodefam
+    total_family_size = pointfam(totnode) + numfam(totnode) - 1
+    allocate(nodefam(total_family_size))
+    nodefam = 0
     
-    t_start = omp_get_wtime() !marcador de tempo no inicio da segunda parte paralela 
+    ! PARTE 3 (GPU): Preenchimento
+    t_start = omp_get_wtime() 
     
-    !$OMP TARGET UPDATE TO(pointfam(1:totnode,:))
-    
-    ! Preencher Nodefam
-    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO PRIVATE(j, idist, kount)
+    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO PRIVATE(j, idist, kount) MAP(TO: pointfam) MAP(FROM: nodefam)
     do i = 1, totnode
         kount = 0
         do j = 1, totnode
-            if (i .ne. j) then
-                idist = dsqrt((coord(j,1) - coord(i,1))**2 + (coord(j,2) - coord(i,2))**2)
+            if (i /= j) then
+                idist = sqrt((coord(j,1) - coord(i,1))**2 + (coord(j,2) - coord(i,2))**2)
                 if (idist <= delta) then
+                    nodefam(pointfam(i) + kount) = j
                     kount = kount + 1
-                    nodefam(pointfam(i,1) + kount - 1, 1) = j
                 endif
             endif
         enddo
     enddo
     !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
     
-    ! Fim da região critica de dados 
-!$OMP END TARGET DATA
+    !$OMP END TARGET DATA
+
+    t_end = omp_get_wtime() 
+    t_parte3 = t_end - t_start
+
+    tempo_total_sim_s1 = t_parte1 + t_parte2 + t_parte3
+
+
+    ! ======================== CÁLCULOS INICIAIS DA CPU ========================
     
-t_end = omp_get_wtime() !marcador de tempo do fim da seggunda parte paralela 
-t_parte3 = t_end - t_start
+    !Definition of the crack surface
+    !PD bonds penetrating through the crack surface are broken
+    do i = 1, totnode
+        do j = 1, numfam(i)
+            cnode = nodefam(pointfam(i) + j - 1)
+            if ((coord(cnode,2) > 0.0_dp) .and. (coord(i,2) < 0.0_dp)) then
+                if ((abs(coord(i,1)) - (crlength / 2.0_dp)) <= 1.0d-10) then
+                    fail(i,j) = 0
+                elseif ((abs(coord(cnode,1)) - (crlength / 2.0_dp)) <= 1.0d-10) then
+                    fail(i,j) = 0
+                endif
+            elseif ((coord(i,2) > 0.0_dp) .and. (coord(cnode,2) < 0.0_dp)) then
+                if((abs(coord(i,1)) - (crlength / 2.0_dp)) <= 1.0d-10) then 
+                    fail(i,j) = 0
+                elseif((abs(coord(cnode,1)) - (crlength / 2.0_dp)) <= 1.0d-10) then
+                    fail(i,j) = 0
+                endif
+            endif        
+        enddo
+    enddo
 
+    ! Loading 1
+    disp(:,1) = 0.001_dp * coord(:,1)
+    disp(:,2) = 0.0_dp
 
-! Somando tudo
-tempo_total_sim_s1 = t_parte1 + t_parte2 + t_parte3
-
-! 1) Escrever um arquivo de saida com os seguintes dados:
-!    Indice dos pontos de cada familia (pointfam)
-!    Pontos que compoem a familia de cada ponto (nodefam)
-!    Tempo que a simulação levou 
-
-! 2) Estudar o OpenMP para CPU e para GPU-offloading
-!    Gerar uma versão do codigo para CPU e outra para GPU-offloading
-
-! 3) Estudar o CUDAFortran 
-!    Gerar uma versão do código para comparação. 
-
-!Debug no teu PC, resultados no LabSin.
-
-!Fazer 4 comparações: 1) Seriado, 2) OpenMP(CPU), 3) OpenMP(GPU-offloading), 4)FortranCUDA  
-!Comparações 1, 2, 3 -> Compilador IntelFortran(ifx) 4 -> Compilador nvfortran
-!IDE Visual Studio Community 
-!Intel Fortran: https://www.intel.com/content/www/us/en/developer/tools/oneapi/hpc-toolkit-download.html?packages=hpc-toolkit&hpc-toolkit-os=windows&hpc-toolkit-win=offline#collapseCollapsible1761228516178
-! RESULTADOS: 1) Comparar se as familias nos 4 testes são iguais e qual o tempo que cada teste levou. 
-
-! - ESCREVER ARQUIVOS NO Fortran
-
-!open(26,file = 'coord_disp_pd_750_pwc_v20.txt')
-!do i = 1, totint
-!	write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
-!enddo
-!111 format(e12.5,3x,e12.5,3x,e12.5,3x,e12.5,3x,e12.5)
-!222 format(i3,3x,i3,3x,....)
-! 1234567.89012   1234567.89012   1234567.89012   1234567.89012 ...
-!close(26)
-
-!------------------------------- RODAR ATÉ AQUI! --------------------------------------------!
-
-!Definition of the crack surface
-!PD bonds penetrating through the crack surface are broken
-do i = 1,totnode
-    do j = 1,numfam(i,1)
-        cnode = nodefam(pointfam(i,1)+j-1,1)
-        if ((coord(cnode,2) > 0.0d0).and.(coord(i,2) < 0.0d0)) then
-            if ((dabs(coord(i,1)) - (crlength / 2.0d0)).le.1.0d-10) then
-				fail(i,j) = 0
-            elseif ((dabs(coord(cnode,1)) - (crlength / 2.0d0)).le.1.0d-10) then
-				fail(i,j) = 0
+    do i = 1, totnode
+        stendens(i,1) = 0.0_dp
+        do j = 1, numfam(i)
+            cnode = nodefam(pointfam(i) + j - 1)
+            idist = sqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
+            nlength = sqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + &
+                           (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
+            if (idist <= delta - radij) then
+                fac = 1.0_dp
+            elseif (idist <= delta + radij) then
+                fac = (delta + radij - idist) / (2.0_dp * radij)
+            else
+                fac = 0.0_dp
             endif
-        elseif ((coord(i,2) > 0.0d0).and.(coord(cnode,2) < 0.0d0)) then
-            if((dabs(coord(i,1)) - (crlength / 2.0d0)).le.1.0d-10) then 
-				fail(i,j) = 0
-			elseif((dabs(coord(cnode,1)) - (crlength / 2.0d0)).le.1.0e-10) then
-				fail(i,j) = 0
-            endif
-        endif        
+            stendens(i,1) = stendens(i,1) + 0.5_dp * 0.5_dp * bc * ((nlength - idist) / idist)**2 * idist * vol * fac  
+        enddo
+        fncst(i,1) = sedload1 / stendens(i,1)
     enddo
-enddo
-
-!Loading 1
-do i = 1,totnode
-    disp(i,1) = 0.001d0 * coord(i,1)
-    disp(i,2) = 0.0d0
-enddo
-
-do i = 1,totnode
-    stendens(i,1) = 0.0d0
-    do j = 1,numfam(i,1)
-        cnode = nodefam(pointfam(i,1)+j-1,1)
-        idist = dsqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
-        nlength = dsqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
-        if (idist.le.delta-radij) then
-            fac = 1.0d0
-        elseif (idist.le.delta+radij) then
-            fac = (delta+radij-idist)/(2.0d0*radij)
-        else
-            fac = 0.0d0
-        endif
-                       
-        stendens(i,1) = stendens(i,1) + 0.5d0 * 0.5d0 * bc * ((nlength - idist) / idist)**2 * idist * vol * fac  
-    enddo
-    !Calculation of surface correction factor in x direction 
-    !by finding the ratio of the analytical strain energy density value
-    !to the strain energy density value obtained from PD Theory
-    fncst(i,1) = sedload1 / stendens(i,1)
-enddo
-    
-!Loading 2
-do i = 1,totnode
-    disp(i,1) = 0.0d0
-    disp(i,2) = 0.001d0 * coord(i,2)
-enddo
-
-do i = 1,totnode
-    stendens(i,2) = 0.0d0
-    do j = 1,numfam(i,1)
-        cnode = nodefam(pointfam(i,1)+j-1,1)
-        idist = dsqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
-        nlength = dsqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
-        if (idist.le.delta-radij) then
-            fac = 1.0d0
-        elseif (idist.le.delta+radij) then
-            fac = (delta+radij-idist)/(2.0d0*radij)
-        else
-            fac = 0.0d0
-        endif   
-                      
-        stendens(i,2) = stendens(i,2) + 0.5d0 * 0.5d0 * bc * ((nlength - idist) / idist)**2 * idist * vol * fac 
-    enddo
-    !Calculation of surface correction factor in y direction 
-    !by finding the ratio of the analytical strain energy density value
-    !to the strain energy density value obtained from PD Theory
-    fncst(i,2) = sedload2 / stendens(i,2)
-enddo
-    
-!Initialization of displacements and velocities
-do i = 1,totnode
-    vel(i,1) = 0.0d0
-    vel(i,2) = 0.0d0
-    disp(i,1) = 0.0d0
-    disp(i,2) = 0.0d0         
-enddo
-
-! Inicializa os acumuladores de tempo antes da integração
-tempo_total_bc_gpu_s = 0.0d0
-tempo_total_forca_s  = 0.0d0
-
-
-
-! Aloquei 'vel' e 'disp' na GPU e depois eles voltam (tofrom)
-!$omp target data map(tofrom: vel(1:totnode,:), disp(1:totnode,:))
-
-! Time integration 
-do tt = 1,nt
-    write(*,*) 'tt = ', tt
-    ctime = tt * dt
-
-    t_inicio_bc = omp_get_wtime()
-    
-! ---------------------------------------------------------------------------------------- Daqui ---------------------------------------------------------
-    !$omp target teams distribute parallel do
-    do i = (totint+1), totbottom
-        vel(i,2) = -20.0d0
-        disp(i,2) = -20.0d0 * tt * dt
-    enddo
-    !$omp end target teams distribute parallel do
-    
-    !$omp target teams distribute parallel do
-    do i = (totbottom+1), tottop
-        vel(i,2) = 20.0d0
-        disp(i,2) = 20.0d0 * tt * dt
-    enddo   
-    !$omp end target teams distribute parallel do
-    
-    t_final_bc = omp_get_wtime()
-    tempo_total_bc_gpu_s = tempo_total_bc_gpu_s + (t_final_bc - t_inicio_bc)
-    
-!______________________________ATÉ AQUI ____________________________________________ 
-    
-    
-
-!______________________________________AQUI__________________________________________
-    
-    t_inicio_forca = omp_get_wtime()
-    
-    ! OMP TARGET: Diz para executar na GPU
-    ! TEAMS DISTRIBUTE PARALLEL DO: Distribui o laço 'i' pelos núcleos da placa de vídeo
-    
-    !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO DEFAULT(SHARED) &
-    !$OMP PRIVATE(j, dmgpar1, dmgpar2, cnode, idist, nlength, fac, &
-    !$OMP         theta, scx, scy, scr, dforce1, dforce2)
-    
-    
-    do i = 1,totnode
-        dmgpar1 = 0.0d0
-        dmgpar2 = 0.0d0
-        pforce(i,1) = 0.0d0
-        pforce(i,2) = 0.0d0
         
-        do j = 1,numfam(i,1)
-                cnode = nodefam(pointfam(i,1)+j-1,1)
-                idist = dsqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
-                nlength = dsqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
+    !  Loading 2
+    disp(:,1) = 0.0_dp
+    disp(:,2) = 0.001_dp * coord(:,2)
+
+    do i = 1, totnode
+        stendens(i,2) = 0.0_dp
+        do j = 1, numfam(i)
+            cnode = nodefam(pointfam(i) + j - 1)
+            idist = sqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
+            nlength = sqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + &
+                           (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
+            if (idist <= delta - radij) then
+                fac = 1.0_dp
+            elseif (idist <= delta + radij) then
+                fac = (delta + radij - idist) / (2.0_dp * radij)
+            else
+                fac = 0.0_dp
+            endif   
+            stendens(i,2) = stendens(i,2) + 0.5_dp * 0.5_dp * bc * ((nlength - idist) / idist)**2 * idist * vol * fac 
+        enddo
+        fncst(i,2) = sedload2 / stendens(i,2)
+    enddo
+        
+    ! Reseta velocidade e deslocamento antes do loop
+    vel = 0.0_dp
+    disp = 0.0_dp         
+
+    ! ======================== LOOP TEMPORAL ========================
+    ! Mapeamos todos os dados estáticos necessários para a GPU
+    !$OMP TARGET DATA MAP(TO: coord, nodefam, pointfam, numfam, fncst, fail) &
+    !$OMP MAP(TOFROM: vel, disp, dmg)
+
+    do tt = 1, nt
+        write(*,*) 'tt = ', tt
+        ctime = tt * dt
+
+        ! ------------------ Boundary Conditions na GPU ------------------
+        t_inicio_bc = omp_get_wtime()
+        
+        !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+        do i = (totint+1), totbottom
+            vel(i,2) = -20.0_dp
+            disp(i,2) = -20.0_dp * tt * dt
+        enddo
+        !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+        
+        !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO
+        do i = (totbottom+1), tottop
+            vel(i,2) = 20.0_dp
+            disp(i,2) = 20.0_dp * tt * dt
+        enddo   
+        !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
+        
+        t_final_bc = omp_get_wtime()
+        tempo_total_bc_gpu_s = tempo_total_bc_gpu_s + (t_final_bc - t_inicio_bc)
+        
+        ! ------------------ Forças Peridinâmicas na GPU ------------------
+        t_inicio_forca = omp_get_wtime()
+        
+        ! NOTA: Mapeamos pforce como FROM, para que a GPU possa enviar 
+        ! as forças de volta para a CPU calcular a cinemática depois.
+        !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO DEFAULT(SHARED) &
+        !$OMP PRIVATE(j, dmgpar1, dmgpar2, cnode, idist, nlength, fac, &
+        !$OMP         theta, scx, scy, scr, dforce1, dforce2) MAP(FROM: pforce)
+        do i = 1, totnode
+            dmgpar1 = 0.0_dp
+            dmgpar2 = 0.0_dp
+            pforce(i,1) = 0.0_dp
+            pforce(i,2) = 0.0_dp
+            
+            do j = 1, numfam(i)
+                cnode = nodefam(pointfam(i) + j - 1)
+                idist = sqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
+                nlength = sqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + &
+                               (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
                 
-                !Volume correction
-                if (idist.le.delta-radij) then
-                    fac = 1.0d0
-                elseif (idist.le.delta+radij) then
-                    fac = (delta+radij-idist)/(2.0d0*radij)
+                ! Volume correction
+                if (idist <= delta - radij) then
+                    fac = 1.0_dp
+                elseif (idist <= delta + radij) then
+                    fac = (delta + radij - idist) / (2.0_dp * radij)
                 else
-                    fac = 0.0d0
+                    fac = 0.0_dp
                 endif
                 
-                if (dabs(coord(cnode,2) - coord(i,2)).le.1.0d-10) then 
-                    theta = 0.0d0
-                elseif (dabs(coord(cnode,1) - coord(i,1)).le.1.0d-10) then
-                    theta = 90.0d0 * pi / 180.0d0
+                if (abs(coord(cnode,2) - coord(i,2)) <= 1.0d-10) then 
+                    theta = 0.0_dp
+                elseif (abs(coord(cnode,1) - coord(i,1)) <= 1.0d-10) then
+                    theta = 90.0_dp * pi / 180.0_dp
                 else
-                    theta = datan(dabs(coord(cnode,2) - coord(i,2)) / dabs(coord(cnode,1) - coord(i,1)))
+                    theta = atan(abs(coord(cnode,2) - coord(i,2)) / abs(coord(cnode,1) - coord(i,1)))
                 endif
                 
-                !Determination of the surface correction between two material points
-                scx = (fncst(i,1) + fncst(cnode,1)) / 2.0d0
-                scy = (fncst(i,2) + fncst(cnode,2)) / 2.0d0
-                scr = 1.0d0 / (((dcos(theta))**2 / (scx)**2) + ((dsin(theta))**2 / (scy)**2))
-                scr = dsqrt(scr)
+                ! Surface correction
+                scx = (fncst(i,1) + fncst(cnode,1)) / 2.0_dp
+                scy = (fncst(i,2) + fncst(cnode,2)) / 2.0_dp
+                scr = 1.0_dp / (((cos(theta))**2 / (scx)**2) + ((sin(theta))**2 / (scy)**2))
+                scr = sqrt(scr)
                 
-                if (fail(i,j).eq.1) then
-                    !Calculation of the peridynamic force in x and y directions 
-                    !acting on a material point i due to a material point j
-                    dforce1 = bc * (nlength - idist) / idist * vol * scr * fac * (coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1)) / nlength             
-                    dforce2 = bc * (nlength - idist) / idist * vol * scr * fac * (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2)) / nlength             
+                if (fail(i,j) == 1) then
+                    dforce1 = bc * (nlength - idist) / idist * vol * scr * fac * (coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1)) / nlength              
+                    dforce2 = bc * (nlength - idist) / idist * vol * scr * fac * (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2)) / nlength              
                 else
-                    dforce1 = 0.0d0
-                    dforce2 = 0.0d0
+                    dforce1 = 0.0_dp
+                    dforce2 = 0.0_dp
                 endif 
-                pforce(i,1) = pforce(i,1) + dforce1             
-                pforce(i,2) = pforce(i,2) + dforce2             
+                pforce(i,1) = pforce(i,1) + dforce1              
+                pforce(i,2) = pforce(i,2) + dforce2              
                 
-                !Definition of a no-fail zone             
-                if (dabs((nlength - idist) / idist) > scr0) then
-                    if (dabs(coord(i,2)).le.(length/4.0d0)) then
+                ! No-fail zone              
+                if (abs((nlength - idist) / idist) > scr0) then
+                    if (abs(coord(i,2)) <= (length / 4.0_dp)) then
                         fail(i,j) = 0 
                     endif
                 endif                      
                             
                 dmgpar1 = dmgpar1 + fail(i,j) * vol * fac
-                dmgpar2 = dmgpar2 + vol * fac             
+                dmgpar2 = dmgpar2 + vol * fac              
+            enddo
+            
+            ! Evita divisão por zero silenciosa
+            if (dmgpar2 > 0.0_dp) then
+                dmg(i) = 1.0_dp - dmgpar1 / dmgpar2
+            else
+                dmg(i) = 0.0_dp
+            end if
         enddo
-        !Calculation of the damage parameter
-        dmg(i,1) = 1.0d0 - dmgpar1 / dmgpar2
-    enddo
-    
-    !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
-    
-    t_final_forca = omp_get_wtime() 
-    tempo_total_forca_s = tempo_total_forca_s + (t_final_forca - t_inicio_forca)
-    ! _________________________________________________ATÉ AQUI_____________________________________________________________ 
-    
-    do i = 1,totint
-        !Calculation of acceleration of material point i
-        acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
-        acc(i,2) = (pforce(i,2) + bforce(i,2)) / dens
-        !Calculation of velocity of material point i
-        !by integrating the acceleration of material point i
-        vel(i,1) = vel(i,1) + acc(i,1) * dt
-        vel(i,2) = vel(i,2) + acc(i,2) * dt
-        !Calculation of displacement of material point i
-        !by integrating the velocity of material point i
-        disp(i,1) = disp(i,1) + vel(i,1) * dt
-        disp(i,2) = disp(i,2) + vel(i,2) * dt
-    enddo
-    
-    do i = (totint+1), totbottom
-        acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
-        vel(i,1) = vel(i,1) + acc(i,1) * dt
-        disp(i,1) = disp(i,1) + vel(i,1) * dt
-    enddo
-
-    do i = (totbottom+1), tottop
-        acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
-        vel(i,1) = vel(i,1) + acc(i,1) * dt
-        disp(i,1) = disp(i,1) + vel(i,1) * dt
-    enddo
-               
-    endtime(tt,1) = ctime
-    
-    if (tt.eq.750 .or. tt.eq.1000 .or. tt.eq.1250) then
-        ! Trazemos o array de deslocamento e dano da GPU para a CPU
-        !$omp target update from(disp(1:totnode,:), dmg(1:totnode,:))
+        !$OMP END TARGET TEAMS DISTRIBUTE PARALLEL DO
         
-      if (tt.eq.750) then
-          open(26,file = 'coord_disp_pd_750_pwc_v20.txt')
-          do i = 1, totint
-              write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
-          enddo
-          close(26)
-      elseif (tt.eq.1000) then
-          open(26,file = 'coord_disp_pd_1000_pwc_v20.txt')
-          do i = 1, totint
-              write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
-          enddo
-          close(26)
-      elseif (tt.eq.1250) then
-          open(26,file = 'coord_disp_pd_1250_pwc_v20.txt')
-          do i = 1, totint
-              write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i,1)
-          enddo
-          close(26)
-      endif
-    endif
+        t_final_forca = omp_get_wtime() 
+        tempo_total_forca_s = tempo_total_forca_s + (t_final_forca - t_inicio_forca)
+        
+        ! ------------------ Integração Cinemática (CPU) ------------------
+        ! A CPU precisa saber as novas velocidades e deslocamentos que a GPU calculou no BC
+        !$OMP TARGET UPDATE FROM(vel, disp)
 
-enddo
+        do i = 1, totint
+            acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
+            acc(i,2) = (pforce(i,2) + bforce(i,2)) / dens
+            vel(i,1) = vel(i,1) + acc(i,1) * dt
+            vel(i,2) = vel(i,2) + acc(i,2) * dt
+            disp(i,1) = disp(i,1) + vel(i,1) * dt
+            disp(i,2) = disp(i,2) + vel(i,2) * dt
+        enddo
+        
+        do i = (totint+1), totbottom
+            acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
+            vel(i,1) = vel(i,1) + acc(i,1) * dt
+            disp(i,1) = disp(i,1) + vel(i,1) * dt
+        enddo
 
-!$omp end target data
+        do i = (totbottom+1), tottop
+            acc(i,1) = (pforce(i,1) + bforce(i,1)) / dens
+            vel(i,1) = vel(i,1) + acc(i,1) * dt
+            disp(i,1) = disp(i,1) + vel(i,1) * dt
+        enddo
 
-111 format(e12.5,3x,e12.5,3x,e12.5,3x,e12.5,3x,e12.5)
+        ! A CPU atualizou vel e disp. Temos que enviar de volta para a GPU para a proxima iteração.
+        !$OMP TARGET UPDATE TO(vel, disp)
+                   
+        if (tt == 750 .or. tt == 1000 .or. tt == 1250) then
+            ! A GPU calcula o dano, atualizamos na CPU para salvar no TXT
+            !$OMP TARGET UPDATE FROM(dmg)
+            
+            if (tt == 750) then
+                open(26, file = 'coord_disp_pd_750_pwc_v20.txt')
+                do i = 1, totint
+                    write(26, '(5(E12.5, 3X))') coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i)
+                enddo
+                close(26)
+            elseif (tt == 1000) then
+                open(26, file = 'coord_disp_pd_1000_pwc_v20.txt')
+                do i = 1, totint
+                    write(26, '(5(E12.5, 3X))') coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i)
+                enddo
+                close(26)
+            elseif (tt == 1250) then
+                open(26, file = 'coord_disp_pd_1250_pwc_v20.txt')
+                do i = 1, totint
+                    write(26, '(5(E12.5, 3X))') coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i)
+                enddo
+                close(26)
+            endif
+        endif
+    enddo
+    
+    !$OMP END TARGET DATA
 
-   t_inicio_io = omp_get_wtime()
+
+    ! ======================== I/O E RELATÓRIO ========================
+    t_inicio_io = omp_get_wtime()
 
     open(unit=26, file='familia_resultados_offloading.txt', status='replace')
 
@@ -591,7 +430,7 @@ enddo
     write(26, *) "Formato: (Indice do Ponto, Indice de Inicio em NODEFAM)"
     write(26, *) "===================================================="
     do i = 1, totnode
-        write(26, '(I10, A, I10)') i, " , ", pointfam(i, 1)
+        write(26, '(I10, A, I10)') i, " , ", pointfam(i)
     enddo
 
     write(26, *) ""
@@ -601,11 +440,11 @@ enddo
     write(26, *) "         [lista de pontos j]"
     write(26, *) "===================================================="
     do i = 1, totnode
-        write(26, '(A, I10, A, I6, A)') "Familia do Ponto ", i, " (Total: ", numfam(i,1), ")"
+        write(26, '(A, I10, A, I6, A)') "Familia do Ponto ", i, " (Total: ", numfam(i), ")"
         
-        if (numfam(i,1) > 0) then
-            do j = 1, numfam(i,1)
-                write(26, '(I10, 1x)', advance='no') nodefam(pointfam(i,1) + j - 1, 1)
+        if (numfam(i) > 0) then
+            do j = 1, numfam(i)
+                write(26, '(I10, 1x)', advance='no') nodefam(pointfam(i) + j - 1)
             enddo
             write(26, *) 
         else
@@ -614,14 +453,12 @@ enddo
         write(26, *) 
     enddo
 
-    ! Fechamos os relógios de I/O e Total antes do encerramento do arquivo
     t_final_io = omp_get_wtime()
     tempo_total_io_s = t_final_io - t_inicio_io
-
     t_final_total = omp_get_wtime()
     tempo_wall_clock = t_final_total - t_inicio_total
 
-    ! Escrevemos o bloco consolidado de performance no fim do log
+    ! Relatório impresso direto no TXT
     write(26, *) ""
     write(26, *) "===== RESUMO DE PERFORMANCE (OFFLOADING GPU) ====="
     write(26, '(A, F12.6, A)') "Tempo Total da Topologia (Fase 1+2+3): ", tempo_total_sim_s1, " s"
@@ -633,16 +470,12 @@ enddo
     write(26, '(A, F12.6, A)') "Tempo de Escrita (I/O):                ", tempo_total_io_s, " s"
     write(26, '(A, F12.6, A)') "Tempo Total do Programa (Wall-clock):  ", tempo_wall_clock, " s"
     write(26, *) "--------------------------------------------------"
-    if (tempo_wall_clock > 0.0d0) then
-        write(26, '(A, F12.2, A)') "Impacto das BCs no Tempo Total:        ", (tempo_total_bc_gpu_s / tempo_wall_clock) * 100.0d0, " %"
-        write(26, '(A, F12.2, A)') "Impacto das Forcas no Tempo Total:     ", (tempo_total_forca_s / tempo_wall_clock) * 100.0d0, " %"
+    if (tempo_wall_clock > 0.0_dp) then
+        write(26, '(A, F12.2, A)') "Impacto das BCs no Tempo Total:        ", (tempo_total_bc_gpu_s / tempo_wall_clock) * 100.0_dp, " %"
+        write(26, '(A, F12.2, A)') "Impacto das Forcas no Tempo Total:     ", (tempo_total_forca_s / tempo_wall_clock) * 100.0_dp, " %"
     endif
     write(26, *) "=================================================="
 
     close(26)
-
-    print *, "Simulacao finalizada com sucesso!"
-    print *, "O relatorio de performance foi salvo no final de 'familia_resultados_offloading.txt'."
-
 
 end program openmp_node_offloading
