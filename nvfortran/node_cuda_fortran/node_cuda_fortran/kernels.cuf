@@ -2,24 +2,27 @@ module kernels_peridinamica
     use cudafor
     implicit none
 
+    ! Define a precisão do tipo de dados
+    integer, parameter :: dp = kind(1.0d0)
+
 contains
 
     ! KERNEL 1: Conta quantos vizinhos cada nó tem no material
-    attributes(global) subroutine conta_vizinhos_gpu(n, coord, delta, numfam)
-        integer, value :: n
-        real(8), value :: delta
-        real(8), device :: coord(n, 2)
-        integer, device :: numfam(n)
+    attributes(global) subroutine count_neighbors_gpu(totnode, coord, delta, family_count)
+        integer, value :: totnode
+        real(dp), value :: delta
+        real(dp), device :: coord(totnode, 2)
+        integer, device :: family_count(totnode)
 
         integer :: i, j
-        real(8) :: dist, dx, dy
+        real(dp) :: dist, dx, dy
 
         ! Identifica qual thread é responsável por qual nó 'i'
         i = (blockIdx%x - 1) * blockDim%x + threadIdx%x
 
-        if (i <= n) then
-            numfam(i) = 0
-            do j = 1, n
+        if (i <= totnode) then
+            family_count(i) = 0
+            do j = 1, totnode
                 if (i == j) cycle
 
                 dx = coord(j,1) - coord(i,1)
@@ -27,30 +30,30 @@ contains
                 dist = sqrt(dx*dx + dy*dy)
 
                 if (dist <= delta) then
-                    numfam(i) = numfam(i) + 1
+                    family_count(i) = family_count(i) + 1
                 end if
             end do
         end if
-    end subroutine conta_vizinhos_gpu
+    end subroutine count_neighbors_gpu
 
     ! KERNEL 2: Preenche a lista nodefam
-    attributes(global) subroutine preenche_nodefam_gpu(n, coord, delta, pointfam, nodefam)
-        integer, value :: n
-        real(8), value :: delta
-        real(8), device :: coord(n, 2)
-        integer, device :: pointfam(n)
-        integer, device :: nodefam(*) ! Ponteiro para array gigante
+    attributes(global) subroutine fill_nodefam_gpu(totnode, coord, delta, family_pointer, family_nodes)
+        integer, value :: totnode
+        real(dp), value :: delta
+        real(dp), device :: coord(totnode, 2)
+        integer, device :: family_pointer(totnode)
+        integer, device :: family_nodes(*) ! Ponteiro para o array unidimensional gigante
 
-        integer :: i, j, k, inicio
-        real(8) :: dist, dx, dy
+        integer :: i, j, k, start_idx
+        real(dp) :: dist, dx, dy
 
         i = (blockIdx%x - 1) * blockDim%x + threadIdx%x
 
-        if (i <= n) then
+        if (i <= totnode) then
             k = 0 ! Contador local
-            inicio = pointfam(i) ! Onde começa a lista deste nó
+            start_idx = family_pointer(i) ! Onde começa a lista deste nó
 
-            do j = 1, n
+            do j = 1, totnode
                 if (i == j) cycle
 
                 dx = coord(j,1) - coord(i,1)
@@ -58,20 +61,18 @@ contains
                 dist = sqrt(dx*dx + dy*dy)
 
                 if (dist <= delta) then
-                    ! Aqui assumimos que pointfam foi calculado corretamente
-                    ! e que nodefam tem espaço suficiente para fazer as conexões
-                    nodefam(inicio + k) = j
+                    family_nodes(start_idx + k) = j
                     k = k + 1
                 end if
             end do
         end if
-    end subroutine preenche_nodefam_gpu
+    end subroutine fill_nodefam_gpu
 
     ! KERNEL 3: Responsável pelas boundary conditions
-    attributes(global) subroutine aplica_bc_gpu(totint, totbottom, tottop, tt, dt, vel, disp)
-        integer, value :: totint, totbottom, tottop, tt
-        real(8), value :: dt
-        real(8), device :: vel(tottop, 2), disp(tottop, 2)
+    attributes(global) subroutine apply_bc_gpu(total_internal, total_bottom, total_top, tt, dt, velocity, displacement)
+        integer, value :: total_internal, total_bottom, total_top, tt
+        real(dp), value :: dt
+        real(dp), device :: velocity(total_top, 2), displacement(total_top, 2)
 
         integer :: i, idx
 
@@ -79,138 +80,139 @@ contains
         i = (blockIdx%x - 1) * blockDim%x + threadIdx%x
 
         ! Mapeia a thread para o índice real do nó (começando após os nós internos)
-        idx = totint + i
+        idx = total_internal + i
 
-        if (idx <= tottop) then
-            if (idx <= totbottom) then
+        if (idx <= total_top) then
+            if (idx <= total_bottom) then
                 ! Região da borda inferior (Bottom)
-                vel(idx, 2) = -20.0d0
-                disp(idx, 2) = -20.0d0 * tt * dt
+                velocity(idx, 2) = -20.0_dp
+                displacement(idx, 2) = -20.0_dp * tt * dt
             else
                 ! Região da borda superior (Top)
-                vel(idx, 2) = 20.0d0
-                disp(idx, 2) = 20.0d0 * tt * dt
+                velocity(idx, 2) = 20.0_dp
+                displacement(idx, 2) = 20.0_dp * tt * dt
             end if
         end if
-    end subroutine aplica_bc_gpu
+    end subroutine apply_bc_gpu
 
-    
+
     ! KERNEL 4: Calcula Forças Peridinâmicas e Dano
-    attributes(global) subroutine calcula_forca_dano_gpu(totnode, maxfam, coord, disp, pforce, fail, dmg, &
-                                                         numfam, pointfam, nodefam, fncst, &
-                                                         delta, radij, pi, bc, vol, scr0, comp_placa)
+    attributes(global) subroutine compute_force_damage_gpu(totnode, maxfam, coord, displacement, p_force, fail, damage, &
+                                                           family_count, family_pointer, family_nodes, surface_correction, &
+                                                           delta, radij, pi, bond_constant, vol, scr0, plate_length)
         implicit none
         integer, value :: totnode, maxfam
-        real(8), value :: delta, radij, pi, bc, vol, scr0, comp_placa
-        real(8), device :: coord(totnode, 2), disp(totnode, 2)
-        real(8), device :: pforce(totnode, 2), dmg(totnode, 1), fncst(totnode, 2)
-        integer, device :: numfam(totnode, 1), pointfam(totnode, 1), nodefam(*)
+        real(dp), value :: delta, radij, pi, bond_constant, vol, scr0, plate_length
+        real(dp), device :: coord(totnode, 2), displacement(totnode, 2)
+        real(dp), device :: p_force(totnode, 2), surface_correction(totnode, 2)
+        real(dp), device :: damage(totnode) ! Transformado em 1D
+        integer, device :: family_count(totnode), family_pointer(totnode), family_nodes(*) ! Transformados em 1D
         integer, device :: fail(totnode, maxfam)
 
         integer :: i, j, cnode
-        real(8) :: dmgpar1, dmgpar2, idist, nlength, fac, theta, scx, scy, scr, dforce1, dforce2
+        real(dp) :: dmg_par1, dmg_par2, idist, nlength, fac, theta, scx, scy, scr, dforce1, dforce2
 
         ! Identifica a thread global e mapeia para o nó 'i'
         i = (blockIdx%x - 1) * blockDim%x + threadIdx%x
 
         if (i <= totnode) then
-            dmgpar1 = 0.0d0
-            dmgpar2 = 0.0d0
-            pforce(i,1) = 0.0d0
-            pforce(i,2) = 0.0d0
+            dmg_par1 = 0.0_dp
+            dmg_par2 = 0.0_dp
+            p_force(i,1) = 0.0_dp
+            p_force(i,2) = 0.0_dp
 
-            do j = 1, numfam(i,1)
-                cnode = nodefam(pointfam(i,1) + j - 1)
-                
+            do j = 1, family_count(i)
+                cnode = family_nodes(family_pointer(i) + j - 1)
+
                 idist = sqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
-                nlength = sqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + &
-                               (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
+                nlength = sqrt((coord(cnode,1) + displacement(cnode,1) - coord(i,1) - displacement(i,1))**2 + &
+                               (coord(cnode,2) + displacement(cnode,2) - coord(i,2) - displacement(i,2))**2)
 
                 ! Volume correction
                 if (idist <= delta - radij) then
-                    fac = 1.0d0
+                    fac = 1.0_dp
                 else if (idist <= delta + radij) then
-                    fac = (delta + radij - idist) / (2.0d0 * radij)
+                    fac = (delta + radij - idist) / (2.0_dp * radij)
                 else
-                    fac = 0.0d0
+                    fac = 0.0_dp
                 end if
 
                 ! Determinação do angulo
                 if (abs(coord(cnode,2) - coord(i,2)) <= 1.0d-10) then
-                    theta = 0.0d0
+                    theta = 0.0_dp
                 else if (abs(coord(cnode,1) - coord(i,1)) <= 1.0d-10) then
-                    theta = 90.0d0 * pi / 180.0d0
+                    theta = 90.0_dp * pi / 180.0_dp
                 else
                     theta = atan(abs(coord(cnode,2) - coord(i,2)) / abs(coord(cnode,1) - coord(i,1)))
                 end if
 
                 ! Surface correction
-                scx = (fncst(i,1) + fncst(cnode,1)) / 2.0d0
-                scy = (fncst(i,2) + fncst(cnode,2)) / 2.0d0
-                scr = 1.0d0 / (((cos(theta))**2 / (scx)**2) + ((sin(theta))**2 / (scy)**2))
+                scx = (surface_correction(i,1) + surface_correction(cnode,1)) / 2.0_dp
+                scy = (surface_correction(i,2) + surface_correction(cnode,2)) / 2.0_dp
+                scr = 1.0_dp / (((cos(theta))**2 / (scx)**2) + ((sin(theta))**2 / (scy)**2))
                 scr = sqrt(scr)
 
                 if (fail(i,j) == 1) then
-                    dforce1 = bc * (nlength - idist) / idist * vol * scr * fac * &
-                              (coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1)) / nlength
-                    dforce2 = bc * (nlength - idist) / idist * vol * scr * fac * &
-                              (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2)) / nlength
+                    dforce1 = bond_constant * (nlength - idist) / idist * vol * scr * fac * &
+                              (coord(cnode,1) + displacement(cnode,1) - coord(i,1) - displacement(i,1)) / nlength
+                    dforce2 = bond_constant * (nlength - idist) / idist * vol * scr * fac * &
+                              (coord(cnode,2) + displacement(cnode,2) - coord(i,2) - displacement(i,2)) / nlength
                 else
-                    dforce1 = 0.0d0
-                    dforce2 = 0.0d0
+                    dforce1 = 0.0_dp
+                    dforce2 = 0.0_dp
                 end if
 
-                pforce(i,1) = pforce(i,1) + dforce1
-                pforce(i,2) = pforce(i,2) + dforce2
+                p_force(i,1) = p_force(i,1) + dforce1
+                p_force(i,2) = p_force(i,2) + dforce2
 
                 ! Definition of a no-fail zone
                 if (abs((nlength - idist) / idist) > scr0) then
-                    if (abs(coord(i,2)) <= (comp_placa / 4.0d0)) then
+                    if (abs(coord(i,2)) <= (plate_length / 4.0_dp)) then
                         fail(i,j) = 0
                     end if
                 end if
 
-                dmgpar1 = dmgpar1 + fail(i,j) * vol * fac
-                dmgpar2 = dmgpar2 + vol * fac
+                dmg_par1 = dmg_par1 + fail(i,j) * vol * fac
+                dmg_par2 = dmg_par2 + vol * fac
             end do
 
             ! Calculation of the damage parameter
-            dmg(i,1) = 1.0d0 - dmgpar1 / dmgpar2
+            damage(i) = 1.0_dp - dmg_par1 / dmg_par2
         end if
-    end subroutine calcula_forca_dano_gpu
+    end subroutine compute_force_damage_gpu
 
     ! KERNEL 5: Integrador Temporal (Cinemática)
-    attributes(global) subroutine integra_cinematica_gpu(totnode, totint, dens, dt, pforce, bforce, vel, disp)
+    attributes(global) subroutine integrate_kinematics_gpu(totnode, total_internal, dens, dt, p_force, b_force, velocity, displacement)
         implicit none
-        integer, value :: totnode, totint
-        real(8), value :: dens, dt
-        real(8), device :: pforce(totnode, 2), bforce(totnode, 2)
-        real(8), device :: vel(totnode, 2), disp(totnode, 2)
+        integer, value :: totnode, total_internal
+        real(dp), value :: dens, dt
+        real(dp), device :: p_force(totnode, 2), b_force(totnode, 2)
+        real(dp), device :: velocity(totnode, 2), displacement(totnode, 2)
 
         integer :: i
-        real(8) :: acc1, acc2
+        real(dp) :: acc1, acc2
 
         ! Identifica a thread global e mapeia para o nó 'i'
         i = (blockIdx%x - 1) * blockDim%x + threadIdx%x
 
         if (i <= totnode) then
             ! Calcula aceleração (Força Peridinâmica + Força de Corpo)
-            acc1 = (pforce(i,1) + bforce(i,1)) / dens
-            acc2 = (pforce(i,2) + bforce(i,2)) / dens
+            acc1 = (p_force(i,1) + b_force(i,1)) / dens
+            acc2 = (p_force(i,2) + b_force(i,2)) / dens
 
-            if (i <= totint) then
+            if (i <= total_internal) then
                 ! Nós Internos: Integração livre em X e Y
-                vel(i,1)  = vel(i,1) + acc1 * dt
-                vel(i,2)  = vel(i,2) + acc2 * dt
-                disp(i,1) = disp(i,1) + vel(i,1) * dt
-                disp(i,2) = disp(i,2) + vel(i,2) * dt
+                velocity(i,1)  = velocity(i,1) + acc1 * dt
+                velocity(i,2)  = velocity(i,2) + acc2 * dt
+                displacement(i,1) = displacement(i,1) + velocity(i,1) * dt
+                displacement(i,2) = displacement(i,2) + velocity(i,2) * dt
             else
-                ! Nós de Contorno (Boundary): Integrar apenas X. 
+                ! Nós de Contorno (Boundary): Integrar apenas X.
                 ! A velocidade/deslocamento em Y é forçada pelas BCs!
-                vel(i,1)  = vel(i,1) + acc1 * dt
-                disp(i,1) = disp(i,1) + vel(i,1) * dt
+                velocity(i,1)  = velocity(i,1) + acc1 * dt
+                displacement(i,1) = displacement(i,1) + velocity(i,1) * dt
             end if
         end if
-    end subroutine integra_cinematica_gpu
+    end subroutine integrate_kinematics_gpu
 
 end module kernels_peridinamica
