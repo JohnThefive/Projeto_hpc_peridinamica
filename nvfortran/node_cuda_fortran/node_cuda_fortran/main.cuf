@@ -2,419 +2,424 @@ program main
     use cudafor
     use kernels_peridinamica
     use omp_lib
-
-    implicit none
-    
-    ! --- Parâmetros de engenharia ---
-    integer, parameter  :: NUM_DIV_X = 500
-    integer, parameter  :: NUM_DIV_Y = 500
-    integer, parameter  :: NUM_BND_LAYERS = 3
-    integer, parameter  :: TOTAL_NODES = NUM_DIV_X * (NUM_DIV_Y + 2 * NUM_BND_LAYERS)
-    integer, parameter  :: NUM_TIME_STEPS = 1250
-    integer, parameter  :: MAX_FAMILY = 100
-    real(dp), parameter :: CRITICAL_STRETCH_0 = 0.04472_dp
-     real(dp), parameter :: HORIZON_FACTOR = 3.015_dp
-
-    ! --- Declarações para o uso de Paralelismo
-    integer, parameter  :: THREADS_PER_BLOCK = 256
   
-
-    ! --- DECLARAÇÕES DE VARIÁVEIS DO HOST (CPU) ---
-    real(dp) :: plate_length, plate_width, dx, delta, thickness, density, elastic_modulus, poisson_ratio
-    real(dp) :: node_area, node_volume, bond_constant
-    real(dp) :: sed_load_1, sed_load_2, dt, total_sim_time, current_sim_time, initial_distance
-    real(dp) :: volume_correction_factor, node_radius, deformed_length, crack_length, pi
-    integer  :: node_count, current_neighbor, i, j, tt, total_internal, total_bottom, total_top
-    integer  :: num_boundary_nodes, ierr, cuda_status, total_family_size
-    
-    ! Vetores 
-    integer  :: family_count(TOTAL_NODES)
-    integer  :: family_pointer(TOTAL_NODES)
-    real(dp) :: damage(TOTAL_NODES)
-    integer, allocatable :: family_nodes(:) ! Alocação dinâmica para evitar Stack Overflow
-    
-    ! Matrizes padrão
-    real(dp) :: coord(TOTAL_NODES,2), p_force(TOTAL_NODES,2), b_force(TOTAL_NODES,2), strain_energy_density(TOTAL_NODES,2)
-    real(dp) :: surface_correction(TOTAL_NODES,2), displacement(TOTAL_NODES,2), velocity(TOTAL_NODES,2)
-    integer  :: fail(TOTAL_NODES,MAX_FAMILY)
-
-    ! --- DECLARAÇÕES DE VARIÁVEIS DO DEVICE (para ir para a GPU) ---
-    real(dp), device, allocatable :: d_coord(:,:)
-    integer, device, allocatable  :: d_family_count(:)
-    integer, device, allocatable  :: d_family_pointer(:)
-    integer, device, allocatable  :: d_family_nodes(:)
-    
-    real(dp), device, allocatable :: d_velocity(:,:), d_displacement(:,:), d_p_force(:,:)
-    real(dp), device, allocatable :: d_surface_correction(:,:), d_b_force(:,:)
-    real(dp), device, allocatable :: d_damage(:)
-    integer, device, allocatable  :: d_fail(:,:)
-
-    ! Configuração CUDA
-    type(dim3) :: grid, block, grid_family
-
-    ! Variáveis de tempo e performance
-    real(dp) :: t_start_topology, t_end_topology, t1, t2
-    real(dp) :: total_topology_time, time_part_a, time_part_b, time_part_c
-    real(dp) :: t_bc_start, t_bc_end
-    real(dp) :: total_bc_time = 0.0_dp
-    real(dp) :: t_force_start, t_force_end, total_force_time = 0.0_dp
-    real(dp) :: t_integration_start, t_integration_end, total_integration_time = 0.0_dp
-    real(dp) :: t_io_start, t_io_end, total_io_time = 0.0_dp
-    real(dp) :: t_total_start, t_total_end, wall_clock_time = 0.0_dp
-
-    ! ======================== INÍCIO DO CÓDIGO  ========================
-
-    ! --- inicio do relógio global ---
-    t_total_start = omp_get_wtime() ! Inicia o relógio global absoluto
-
-    pi = acos(-1.0_dp)
-    ! Inicialização de arrays 
-    coord                 = 0.0_dp
-    family_count          = 0
-    family_pointer        = 0
-    p_force               = 0.0_dp
-    b_force               = 0.0_dp
-    strain_energy_density = 0.0_dp
-    surface_correction    = 1.0_dp
-    displacement          = 0.0_dp
-    velocity              = 0.0_dp
-    damage                = 0.0_dp
-    fail                  = 1 ! Inicialização direta de falha ativa para todas as ligações
-
-    ! Propriedades Físicas e Geométricas
-    plate_length    = 0.05_dp
-    plate_width     = 0.05_dp
-    dx              = plate_length / NUM_DIV_X
-    delta           = HORIZON_FACTOR * dx
-    thickness       = dx
-    density         = 8000.0_dp
-    elastic_modulus = 192.0d9
-    poisson_ratio   = 1.0_dp / 3.0_dp
-    node_area       = dx * dx
-    node_volume     = node_area * dx
-    bond_constant   = 9.0_dp * elastic_modulus / (pi * thickness * (delta**3))
-    sed_load_1      = 9.0_dp / 16.0_dp * elastic_modulus * 1.0d-6
-    sed_load_2      = 9.0_dp / 16.0_dp * elastic_modulus * 1.0d-6
-    dt              = 0.8_dp * sqrt(2.0_dp * density * dx / (pi * delta**2 * dx * bond_constant))
-    total_sim_time  = NUM_TIME_STEPS * dt
-    current_sim_time = 0.0_dp
-    node_radius     = dx / 2.0_dp
-    node_count      = 0
-    crack_length    = 0.01_dp
-
-    ! Definição das localizações dos pontos materiais da região interna
-    do i = 1, NUM_DIV_Y
-        do j = 1, NUM_DIV_X
-            node_count = node_count + 1
-            coord(node_count,1) = (-1.0_dp * plate_length / 2.0_dp) + (dx / 2.0_dp) + (j-1) * dx
-            coord(node_count,2) = (-1.0_dp * plate_width / 2.0_dp) + (dx / 2.0_dp) + (i-1) * dx
-        enddo
-    enddo
-    total_internal = node_count
-
-    ! Região de contorno - Inferior
-    do i = 1, NUM_BND_LAYERS
-        do j = 1, NUM_DIV_X
-            node_count = node_count + 1
-            coord(node_count,1) = -1.0_dp / 2.0_dp * plate_length + (dx / 2.0_dp) + (j - 1) * dx
-            coord(node_count,2) = -1.0_dp / 2.0_dp * plate_width - (dx / 2.0_dp) - (i - 1) * dx
-        enddo
-    enddo
-    total_bottom = node_count
-
-    ! Região de contorno - Superior
-    do i = 1, NUM_BND_LAYERS
-        do j = 1, NUM_DIV_X
-            node_count = node_count + 1
-            coord(node_count,1) = -1.0_dp / 2.0_dp * plate_length + (dx / 2.0_dp) + (j - 1) * dx
-            coord(node_count,2) =  1.0_dp / 2.0_dp * plate_width + (dx / 2.0_dp) + (i - 1) * dx
-        enddo
-    enddo
-    total_top = node_count
-
-! ---------------- Inicio da paralelização ---------------------
-
-    ! Configuração do Grid CUDA (Após o cálculo das dimensões da malha)
-    block       = dim3(THREADS_PER_BLOCK, 1, 1)
-    grid_family = dim3((TOTAL_NODES + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK, 1, 1)
-    num_boundary_nodes = total_top - total_internal
-    grid        = dim3((num_boundary_nodes + block%x - 1) / block%x, 1, 1)
-
-    ! Alocação e cópia dos vetores de topologia
-    allocate(d_coord(TOTAL_NODES, 2))
-    allocate(d_family_count(TOTAL_NODES))
-    allocate(d_family_pointer(TOTAL_NODES))
-
-    d_coord          = coord
-    d_family_count   = 0
-    d_family_pointer = 0
-
-    ! --- BUSCA DE VIZINHOS NA GPU ---
-    t_start_topology = omp_get_wtime()
-    t1 = omp_get_wtime()
-
-    call count_neighbors_gpu<<<grid_family, block>>>(TOTAL_NODES, d_coord, delta, d_family_count)
-    cuda_status = cudaDeviceSynchronize()
-    if (cuda_status /= cudaSuccess) then
-        print *, "ERRO CUDA (count_neighbors_gpu): ", cudaGetErrorString(cuda_status)
-        stop 1
-    endif
-
-    t2 = omp_get_wtime()
-    time_part_a = t2 - t1
-
-    family_count = d_family_count
-
-    ! Varredura/Prefix Sum na CPU
-    t1 = omp_get_wtime()
-    family_pointer(1) = 1
-    do i = 2, TOTAL_NODES
-        family_pointer(i) = family_pointer(i-1) + family_count(i-1)
-    enddo
-    total_family_size = family_pointer(TOTAL_NODES) + family_count(TOTAL_NODES) - 1
-    t2 = omp_get_wtime()
-    time_part_b = t2 - t1
-
-    ! Alocação dinâmica com o tamanho exato descoberto
-    allocate(family_nodes(total_family_size))
-    allocate(d_family_nodes(total_family_size))
-    family_nodes   = 0
-    d_family_nodes = 0
-
-    t1 = omp_get_wtime()
-    d_family_pointer = family_pointer
-
-    call fill_nodefam_gpu<<<grid_family, block>>>(TOTAL_NODES, d_coord, delta, d_family_pointer, d_family_nodes)
-    cuda_status = cudaDeviceSynchronize()
-    if (cuda_status /= cudaSuccess) then
-        print *, "ERRO CUDA (fill_nodefam_gpu): ", cudaGetErrorString(cuda_status)
-        stop 1
-    endif
-
-    family_nodes = d_family_nodes
-    t2 = omp_get_wtime()
-    time_part_c = t2 - t1
-
-    t_end_topology = omp_get_wtime()
-    total_topology_time = t_end_topology - t_start_topology
-
-
-    ! --- DEFINIÇÃO DA TRINCA INICIAL  ---
-    do i = 1, TOTAL_NODES
-        do j = 1, family_count(i)
-            current_neighbor = family_nodes(family_pointer(i)+j-1)
-            if ((coord(current_neighbor,2) > 0.0_dp) .and. (coord(i,2) < 0.0_dp)) then
-                if ((abs(coord(i,1)) - (crack_length / 2.0_dp)) <= 1.0d-10) then
-                    fail(i,j) = 0
-                elseif ((abs(coord(current_neighbor,1)) - (crack_length / 2.0_dp)) <= 1.0d-10) then
-                    fail(i,j) = 0
-                endif
-            elseif ((coord(i,2) > 0.0_dp) .and. (coord(current_neighbor,2) < 0.0_dp)) then
-                if((abs(coord(i,1)) - (crack_length / 2.0_dp)) <= 1.0d-10) then
-                    fail(i,j) = 0
-                elseif((abs(coord(current_neighbor,1)) - (crack_length / 2.0_dp)) <= 1.0d-10) then
-                    fail(i,j) = 0
-                endif
-            endif
-        enddo
-    enddo
-
-    ! --- CORREÇÃO DE SUPERFÍCIE - DIREÇÃO X (Loading 1) ---
-    displacement(:,1) = 0.001_dp * coord(:,1)
-    displacement(:,2) = 0.0_dp
-
-    do i = 1, TOTAL_NODES
-        strain_energy_density(i,1) = 0.0_dp
-        do j = 1, family_count(i)
-            current_neighbor = family_nodes(family_pointer(i)+j-1)
-            initial_distance = sqrt((coord(current_neighbor,1) - coord(i,1))**2 + (coord(current_neighbor,2) - coord(i,2))**2)
-            deformed_length  = sqrt((coord(current_neighbor,1) + displacement(current_neighbor,1) - coord(i,1) - displacement(i,1))**2 + &
-                                    (coord(current_neighbor,2) + displacement(current_neighbor,2) - coord(i,2) - displacement(i,2))**2)
-            if (initial_distance <= delta - node_radius) then
-                volume_correction_factor = 1.0_dp
-            elseif (initial_distance <= delta + node_radius) then
-                volume_correction_factor = (delta + node_radius - initial_distance) / (2.0_dp * node_radius)
-            else
-                volume_correction_factor = 0.0_dp
-            endif
-            strain_energy_density(i,1) = strain_energy_density(i,1) + 0.5_dp * 0.5_dp * bond_constant * &
-                                         ((deformed_length - initial_distance) / initial_distance)**2 * initial_distance * node_volume * volume_correction_factor
-        enddo
-        surface_correction(i,1) = sed_load_1 / strain_energy_density(i,1)
-    enddo
-
-    ! --- CORREÇÃO DE SUPERFÍCIE - DIREÇÃO Y (Loading 2) ---
-    displacement(:,1) = 0.0_dp
-    displacement(:,2) = 0.001_dp * coord(:,2)
-
-    do i = 1, TOTAL_NODES
-        strain_energy_density(i,2) = 0.0_dp
-        do j = 1, family_count(i)
-            current_neighbor = family_nodes(family_pointer(i)+j-1)
-            initial_distance = sqrt((coord(current_neighbor,1) - coord(i,1))**2 + (coord(current_neighbor,2) - coord(i,2))**2)
-            deformed_length  = sqrt((coord(current_neighbor,1) + displacement(current_neighbor,1) - coord(i,1) - displacement(i,1))**2 + &
-                                    (coord(current_neighbor,2) + displacement(current_neighbor,2) - coord(i,2) - displacement(i,2))**2)
-            if (initial_distance <= delta - node_radius) then
-                volume_correction_factor = 1.0_dp
-            elseif (initial_distance <= delta + node_radius) then
-                volume_correction_factor = (delta + node_radius - initial_distance) / (2.0_dp * node_radius)
-            else
-                volume_correction_factor = 0.0_dp
-            endif
-            strain_energy_density(i,2) = strain_energy_density(i,2) + 0.5_dp * 0.5_dp * bond_constant * &
-                                         ((deformed_length - initial_distance) / initial_distance)**2 * initial_distance * node_volume * volume_correction_factor
-        enddo
-        surface_correction(i,2) = sed_load_2 / strain_energy_density(i,2)
-    enddo
-
-    ! Reseta os deslocamentos para zero antes do loop temporal dinâmico
-    displacement = 0.0_dp
-
-    ! --- ALOCAÇÃO E TRANSFERÊNCIA DE DADOS PARA A GPU (DADOS PRONTOS) ---
-    allocate(d_velocity(TOTAL_NODES, 2), d_displacement(TOTAL_NODES, 2))
-    allocate(d_p_force(TOTAL_NODES, 2), d_surface_correction(TOTAL_NODES, 2), d_damage(TOTAL_NODES))
-    allocate(d_fail(TOTAL_NODES, MAX_FAMILY), d_b_force(TOTAL_NODES, 2))
-
-    d_velocity           = velocity
-    d_displacement       = displacement
-    d_b_force            = b_force
-    d_surface_correction = surface_correction
-    d_fail               = fail
-    d_damage             = damage
-
-    ! --- LOOP TEMPORAL DE INTEGRAÇÃO DINÂMICA ---
-    do tt = 1, NUM_TIME_STEPS
-        write(*,*) 'tt = ', tt
-        current_sim_time = tt * dt
-
-
-! -------------- Paralelização de boundary Condiditions -------------
-
-        ! KERNEL 3: APLICA AS CONDIÇÕES DE CONTORNO (BC) DE VELOCIDADE/DESLOCAMENTO
-        t_bc_start = omp_get_wtime()
-        call apply_bc_gpu<<<grid, block>>>(total_internal, total_bottom, total_top, tt, dt, d_velocity, d_displacement)
-        ierr = cudaDeviceSynchronize()
-        if (ierr /= cudaSuccess) then
-            print *, "ERRO CUDA (apply_bc_gpu): ", cudaGetErrorString(ierr)
-            stop 1
-        endif
-        t_bc_end = omp_get_wtime()
-        total_bc_time = total_bc_time + (t_bc_end - t_bc_start)
-
-! -------------- Paralelização de das forças em relação a Cinemática -------------        
-
-        ! KERNEL 4: COMPUTA AS FORÇAS INTERNAS E ATUALIZA O DANO
-        t_force_start = omp_get_wtime()
-        call compute_force_damage_gpu<<<grid_family, block>>>(TOTAL_NODES, MAX_FAMILY, d_coord, d_displacement, d_p_force, &
-                                                             d_fail, d_damage, d_family_count, d_family_pointer, d_family_nodes, &
-                                                             d_surface_correction, delta, node_radius, pi, bond_constant, node_volume, CRITICAL_STRETCH_0, plate_length)
-        ierr = cudaDeviceSynchronize()
-        if (ierr /= cudaSuccess) then
-            print *, "ERRO CUDA (compute_force_damage_gpu): ", cudaGetErrorString(ierr)
-            stop 1
-        endif
-        t_force_end = omp_get_wtime()
-        total_force_time = total_force_time + (t_force_end - t_force_start)
-
-        ! KERNEL 5: INTEGRADOR EXPLÍCITO DA CINEMÁTICA
-        t_integration_start = omp_get_wtime()
-        call integrate_kinematics_gpu<<<grid_family, block>>>(TOTAL_NODES, total_internal, density, dt, d_p_force, d_b_force, d_velocity, d_displacement)
-        ierr = cudaDeviceSynchronize()
-        if (ierr /= cudaSuccess) then
-            print *, "ERRO CUDA (integrate_kinematics_gpu): ", cudaGetErrorString(ierr)
-            stop 1
-        endif
-        t_integration_end = omp_get_wtime()
-        total_integration_time = total_integration_time + (t_integration_end - t_integration_start)
-
-        ! Escrita de resultados parciais em arquivos texto
-        if (tt == 750 .or. tt == 1000 .or. tt == 1250) then
-            displacement = d_displacement
-            damage       = d_damage
-
-            if (tt == 750) then
-                open(26, file = 'coord_disp_pd_750_pwc_v20.txt')
-                do i = 1, total_internal
-                    write(26,111) coord(i,1), coord(i,2), displacement(i,1), displacement(i,2), damage(i)
-                enddo
-                close(26)
-            elseif (tt == 1000) then
-                open(26, file = 'coord_disp_pd_1000_pwc_v20.txt')
-                do i = 1, total_internal
-                    write(26,111) coord(i,1), coord(i,2), displacement(i,1), displacement(i,2), damage(i)
-                enddo
-                close(26)
-            elseif (tt == 1250) then
-                open(26, file = 'coord_disp_pd_1250_pwc_v20.txt')
-                do i = 1, total_internal
-                    write(26,111) coord(i,1), coord(i,2), displacement(i,1), displacement(i,2), damage(i)
-                enddo
-                close(26)
-            endif
-        endif
-    enddo
-
-    111 format(e12.5,3x,e12.5,3x,e12.5,3x,e12.5,3x,e12.5)
-
-    ! --- ESCRITA FINAL DO RELATÓRIO DE CONFIGURAÇÃO DE VIZINHANÇA ---
-    t_io_start = omp_get_wtime()
-
-    open(unit=26, file='familia_resultados_cuda.txt', status='replace')
-
-    write(26, *) "===================================================="
-    write(26, *) "INDICE DOS PONTOS DE CADA FAMILIA (POINTFAM)"
-    write(26, *) "Formato: (Indice do Ponto, Indice de Inicio em NODEFAM)"
-    write(26, *) "===================================================="
-    do i = 1, TOTAL_NODES
-        write(26, '(I10, A, I10)') i, " , ", family_pointer(i)
-    enddo
-
-    write(26, *) ""
-    write(26, *) "===================================================="
-    write(26, *) "PONTOS QUE COMPOEM A FAMILIA (NODEFAM)"
-    write(26, *) "Formato: Familia do Ponto X (Total: Y)"
-    write(26, *) "         [lista de pontos j]"
-    write(26, *) "===================================================="
-    do i = 1, TOTAL_NODES
-        write(26, '(A, I10, A, I6, A)') "Familia do Ponto ", i, " (Total: ", family_count(i), ")"
-        if (family_count(i) > 0) then
-            do j = 1, family_count(i)
-                write(26, '(I10, 1x)', advance='no') family_nodes(family_pointer(i) + j - 1)
-            enddo
-            write(26, *)
-        else
-            write(26, '(A)') "  (Familia vazia)"
-        endif
-        write(26, *)
-    enddo
-
-    t_io_end = omp_get_wtime()
-    total_io_time = t_io_end - t_io_start
-
-    t_total_end = omp_get_wtime()
-    wall_clock_time = t_total_end - t_total_start
-
-    ! Consolidação dos perfis de performance
-    write(26, *) ""
-    write(26, *) "===== RESUMO DE PERFORMANCE (CUDA FORTRAN) ====="
-    write(26, '(A, F12.6, A)') "Tempo Total da Topologia (Fase 1+2+3): ", total_topology_time, " s"
-    write(26, '(A, F12.6, A)') "  -> Parte 1 (GPU Count):                ", time_part_a, " s"
-    write(26, '(A, F12.6, A)') "  -> Parte 2 (CPU Scan/Prefix Sum):      ", time_part_b, " s"
-    write(26, '(A, F12.6, A)') "  -> Parte 3 (GPU Fill nodefam):         ", time_part_c, " s"
-    write(26, '(A, F12.6, A)') "Tempo das Condicoes (Kernel 3):        ", total_bc_time, " s"
-    write(26, '(A, F12.6, A)') "Tempo de Forcas/Dano (Kernel 4):       ", total_force_time, " s"
-    write(26, '(A, F12.6, A)') "Tempo do Integrador (Kernel 5):        ", total_integration_time, " s"
-    write(26, '(A, F12.6, A)') "Tempo de Escrita (I/O):                ", total_io_time, " s"
-    write(26, '(A, F12.6, A)') "Tempo Total do Programa (Wall-clock):  ", wall_clock_time, " s"
-    write(26, *) "--------------------------------------------------"
-    if (wall_clock_time > 0.0_dp) then
-        write(26, '(A, F12.2, A)') "Impacto das Forcas no Tempo Total:     ", (total_force_time / wall_clock_time) * 100.0_dp, " %"
-    endif
-    write(26, *) "================================================"
-
-    close(26)
-
-    print *, "Simulacao finalizada com sucesso!"
-    print *, "O relatorio de performance foi salvo no final de 'familia_resultados_cuda.txt'."
-
-end program main
+  implicit none
+  
+  integer ndivx, ndivy, totnode, nt, maxfam, nnum, cnode, i, j, tt, nbnd, totint, totbottom, tottop
+  parameter(ndivx = 500)
+  parameter(ndivy = 500)
+  parameter(nbnd = 3)
+  parameter(totnode = ndivx*(ndivy + 2 * nbnd))
+  parameter(nt = 1250)
+  parameter(maxfam = 100)
+  
+  real *8 length,width, dx, delta, thick, dens, emod, pratio, area, vol, bc
+  real *8 sedload1, sedload2, dt, totime, ctime, idist, fac, radij, nlength, dforce1, dforce2
+  real *8 crlength, scr0, pi
+  
+  real *8 coord(totnode,2), pforce(totnode,2), pforceold(totnode,2), bforce(totnode,2), stendens(totnode,2)
+  real *8 fncst(totnode,2), disp(totnode,2), vel(totnode,2), velhalfold(totnode,2), velhalf(totnode,2)
+  real *8 acc(totnode,2), massvec(totnode,2)
+  
+  ! Transformados em vetores 1D assim como no Offloading
+  real *8 enddisp(nt), endtime(nt), dmg(totnode)
+  integer numfam(totnode), pointfam(totnode), fail(totnode,maxfam)
+  
+  ! Arrays dinâmicos para CPU e GPU
+  integer, allocatable :: nodefam(:)
+  integer, device, allocatable :: nodefam_d(:)
+  integer :: total_family_size
+  
+  real(8), device, allocatable :: coord_d(:,:)
+  integer, device, allocatable :: numfam_d(:)
+  integer, device, allocatable :: pointfam_d(:)
+  
+  type(dim3) :: grid, block, grid_familia
+  integer :: threadsPorBloco, numBlocos, err_cuda
+  
+  ! Variaveis para Timer
+  real*8 :: t_inicio_numfam_sim, t_final_numfam_sim, t1, t2
+  real*8 :: tempo_total_sim_s, tempo_parte_a, tempo_parte_b, tempo_parte_c
+  
+  real(8) :: t_bc_inicio_total, t_bc_fim_kernel, t_bc_fim_sync, t_bc_fim_d2h
+  real(8) :: tempo_bc_kernel_s = 0.0d0, tempo_bc_sync_s = 0.0d0, tempo_bc_d2h_s = 0.0d0
+  real(8) :: tempo_total_bc_cuda_s = 0.0d0
+  
+  integer :: n_bordas, ierr
+  
+  real(8), device, allocatable :: d_vel(:,:), d_disp(:,:), d_pforce(:,:), d_fncst(:,:)
+  real(8), device, allocatable :: d_dmg(:), d_bforce(:,:)
+  integer, device, allocatable :: d_fail(:,:)
+  
+  real(8) :: t_i_inicio, t_i_fim, tempo_total_integra_s = 0.0d0
+  real(8) :: t_inicio_io, t_final_io, tempo_total_io_s = 0.0d0
+  real(8) :: t_inicio_total, t_final_total, tempo_wall_clock = 0.0d0
+  real(8) :: t_f_inicio, t_f_kernel, t_f_sync, t_f_d2h
+  real(8) :: tempo_forca_kernel_s = 0.0d0, tempo_forca_sync_s = 0.0d0
+  real(8) :: tempo_forca_d2h_s = 0.0d0, tempo_total_forca_cuda_s = 0.0d0
+  
+  t_inicio_total = omp_get_wtime() 
+  pi = dacos(-1.0d0)
+  
+  do i = 1, totnode
+      coord(i,1) = 0.0d0
+      coord(i,2) = 0.0d0
+      numfam(i) = 0
+      pointfam(i) = 0
+      pforce(i,1) = 0.0d0
+      pforce(i,2) = 0.0d0
+      pforceold(i,1) = 0.0d0
+      pforceold(i,2) = 0.0d0
+      bforce(i,1) = 0.0d0
+      bforce(i,2) = 0.0d0
+      stendens(i,1) = 0.0d0
+      stendens(i,2) = 0.0d0
+      fncst(i,1) = 1.0d0
+      fncst(i,2) = 1.0d0
+      disp(i,1) = 0.0d0
+      disp(i,2) = 0.0d0
+      vel(i,1) = 0.0d0
+      vel(i,2) = 0.0d0
+      velhalfold(i,1) = 0.0d0
+      velhalfold(i,2) = 0.0d0
+      velhalf(i,1) = 0.0d0
+      velhalf(i,2) = 0.0d0
+      acc(i,1) = 0.0d0
+      acc(i,2) = 0.0d0
+      massvec(i,1) = 0.0d0
+      massvec(i,2) = 0.0d0
+      do j = 1, maxfam
+          fail(i,j) = 0
+      enddo
+      dmg(i) = 0.0d0
+  enddo
+  
+  length = 0.05d0
+  width = 0.05d0
+  dx = length / ndivx
+  delta = 3.015d0 * dx
+  thick = dx
+  dens = 8000.0d0
+  emod = 192.0d9
+  pratio = 1.0d0 / 3.0d0
+  area = dx * dx
+  vol = area * dx
+  bc = 9.0d0 * emod / (pi * thick * (delta**3))
+  sedload1 = 9.0d0 / 16.0d0 * emod * 1.0d-6
+  sedload2 = 9.0d0 / 16.0d0 * emod * 1.0d-6
+  dt = 0.8d0 * dsqrt(2.0d0*dens*dx/(pi*delta**2*dx*bc))
+  totime = nt * dt
+  ctime = 0.0d0
+  idist = 0.0d0
+  do i = 1, nt
+      enddisp(i) = 0.0d0
+      endtime(i) = 0.0d0
+  enddo
+  fac = 0.0d0
+  radij = dx / 2.0d0
+  nnum = 0
+  cnode = 0
+  nlength  = 0.0d0
+  dforce1 = 0.0d0
+  dforce2 = 0.0d0
+  crlength = 0.01d0
+  scr0 = 0.04472d0
+  
+  do i = 1,totnode
+      do j = 1,maxfam
+          fail(i,j) = 1
+      enddo
+  enddo
+  
+  do i = 1,ndivy
+      do j = 1,ndivx
+          nnum = nnum + 1
+          coord(nnum,1) = (-1.0d0 * length / 2.0d0) + (dx / 2.0d0) + (j-1) * dx
+          coord(nnum,2) = (-1.0d0 * width / 2.0d0) + (dx / 2.0d0) + (i-1) * dx
+      enddo
+  enddo
+  totint = nnum
+  
+  do i = 1,nbnd
+      do j = 1,ndivx
+          nnum = nnum + 1
+          coord(nnum,1) = -1.0d0 / 2.0d0 * length + (dx / 2.0d0) + (j - 1) * dx
+          coord(nnum,2) = -1.0d0 / 2.0d0 * width - (dx / 2.0d0) - (i - 1) * dx
+      enddo
+  enddo
+  totbottom = nnum
+  
+  do i = 1,nbnd
+      do j = 1,ndivx
+          nnum = nnum + 1
+          coord(nnum,1) = -1.0d0 / 2.0d0 * length + (dx / 2.0d0) + (j - 1) * dx
+          coord(nnum,2) =  1.0d0 / 2.0d0 * width + (dx / 2.0d0) + (i - 1) * dx
+      enddo
+  enddo
+  tottop = nnum
+  
+  !------------------------------- PRE-PROCESSAMENTO GPU --------------------------------------------!
+  
+  block = dim3(256, 1, 1)
+  grid_familia = dim3((totnode + 255) / 256, 1, 1)
+  
+  allocate(coord_d(totnode, 2))
+  allocate(numfam_d(totnode))
+  allocate(pointfam_d(totnode))
+  
+  coord_d(1:totnode, 1:2) = coord(1:totnode, 1:2)
+  numfam_d(1:totnode) = 0
+  pointfam_d(1:totnode) = 0
+  
+  t_inicio_numfam_sim = omp_get_wtime()
+  
+  ! Parte A: GPU Count
+  t1 = omp_get_wtime()
+  call count_neighbors_gpu<<<grid_familia, block>>>(totnode, coord_d, delta, numfam_d)
+  err_cuda = cudaDeviceSynchronize()
+  t2 = omp_get_wtime()
+  tempo_parte_a = t2 - t1
+  
+  ! Parte B: Scan na CPU
+  numfam(1:totnode) = numfam_d(1:totnode)
+  t1 = omp_get_wtime()
+  pointfam(1) = 1
+  do i = 2, totnode
+      pointfam(i) = pointfam(i-1) + numfam(i-1)
+  enddo
+  
+  ! ALOCAÇÃO DINÂMICA com o tamanho exato da malha
+  total_family_size = pointfam(totnode) + numfam(totnode) - 1
+  allocate(nodefam(total_family_size))
+  allocate(nodefam_d(total_family_size))
+  
+  t2 = omp_get_wtime()
+  tempo_parte_b = t2 - t1
+  
+  ! Parte C: GPU Fill
+  t1 = omp_get_wtime()
+  pointfam_d(1:totnode) = pointfam(1:totnode)
+  
+  call fill_nodefam_gpu<<<grid_familia, block>>>(totnode, coord_d, delta, pointfam_d, nodefam_d)
+  err_cuda = cudaDeviceSynchronize()
+  
+  ! Traz os dados para processar a trinca na CPU
+  nodefam(1:total_family_size) = nodefam_d(1:total_family_size)
+  t2 = omp_get_wtime()
+  tempo_parte_c = t2 - t1
+  
+  t_final_numfam_sim = omp_get_wtime()
+  tempo_total_sim_s = t_final_numfam_sim - t_inicio_numfam_sim
+  
+  !-------------------------------- TRINCA E CONDIÇOES INICIAIS ------------------------------------!
+  
+  do i = 1,totnode
+      do j = 1,numfam(i)
+          cnode = nodefam(pointfam(i)+j-1)
+          if ((coord(cnode,2) > 0.0d0).and.(coord(i,2) < 0.0d0)) then
+              if ((dabs(coord(i,1)) - (crlength / 2.0d0)).le.1.0d-10) fail(i,j) = 0
+              if ((dabs(coord(cnode,1)) - (crlength / 2.0d0)).le.1.0d-10) fail(i,j) = 0
+          elseif ((coord(i,2) > 0.0d0).and.(coord(cnode,2) < 0.0d0)) then
+              if((dabs(coord(i,1)) - (crlength / 2.0d0)).le.1.0d-10) fail(i,j) = 0
+              if((dabs(coord(cnode,1)) - (crlength / 2.0d0)).le.1.0d-10) fail(i,j) = 0
+          endif
+      enddo
+  enddo
+  
+  do i = 1,totnode
+      disp(i,1) = 0.001d0 * coord(i,1)
+      disp(i,2) = 0.0d0
+  enddo
+  
+  do i = 1,totnode
+      stendens(i,1) = 0.0d0
+      do j = 1,numfam(i)
+          cnode = nodefam(pointfam(i)+j-1)
+          idist = dsqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
+          nlength = dsqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + &
+                          (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
+          if (idist.le.delta-radij) then
+              fac = 1.0d0
+          elseif (idist.le.delta+radij) then
+              fac = (delta+radij-idist)/(2.0d0*radij)
+          else
+              fac = 0.0d0
+          endif
+          stendens(i,1) = stendens(i,1) + 0.5d0 * 0.5d0 * bc * ((nlength - idist) / idist)**2 * idist * vol * fac
+      enddo
+      fncst(i,1) = sedload1 / stendens(i,1)
+  enddo
+  
+  do i = 1,totnode
+      disp(i,1) = 0.0d0
+      disp(i,2) = 0.001d0 * coord(i,2)
+  enddo
+  
+  do i = 1,totnode
+      stendens(i,2) = 0.0d0
+      do j = 1,numfam(i)
+          cnode = nodefam(pointfam(i)+j-1)
+          idist = dsqrt((coord(cnode,1) - coord(i,1))**2 + (coord(cnode,2) - coord(i,2))**2)
+          nlength = dsqrt((coord(cnode,1) + disp(cnode,1) - coord(i,1) - disp(i,1))**2 + &
+                          (coord(cnode,2) + disp(cnode,2) - coord(i,2) - disp(i,2))**2)
+          if (idist.le.delta-radij) then
+              fac = 1.0d0
+          elseif (idist.le.delta+radij) then
+              fac = (delta+radij-idist)/(2.0d0*radij)
+          else
+              fac = 0.0d0
+          endif
+          stendens(i,2) = stendens(i,2) + 0.5d0 * 0.5d0 * bc * ((nlength - idist) / idist)**2 * idist * vol * fac
+      enddo
+      fncst(i,2) = sedload2 / stendens(i,2)
+  enddo
+  
+  do i = 1,totnode
+      vel(i,1) = 0.0d0
+      vel(i,2) = 0.0d0
+      disp(i,1) = 0.0d0
+      disp(i,2) = 0.0d0
+  enddo
+  
+  !-------------------------------- ALOCAÇÃO FINAL GPU ------------------------------------!
+  
+  block = dim3(256, 1, 1)
+  n_bordas = tottop - totint
+  grid = dim3((n_bordas + block%x - 1) / block%x, 1, 1)
+  
+  allocate(d_vel(totnode, 2), d_disp(totnode, 2))
+  allocate(d_pforce(totnode, 2), d_fncst(totnode, 2), d_dmg(totnode))
+  allocate(d_fail(totnode, maxfam), d_bforce(totnode, 2))
+  
+  d_vel(1:totnode, 1:2) = vel(1:totnode, 1:2)
+  d_disp(1:totnode, 1:2) = disp(1:totnode, 1:2)
+  d_bforce(1:totnode, 1:2) = bforce(1:totnode, 1:2)
+  d_fncst(1:totnode, 1:2) = fncst(1:totnode, 1:2)
+  d_fail(1:totnode, :) = fail(1:totnode, :)
+  d_dmg(1:totnode) = dmg(1:totnode)
+  
+  !-------------------------------- INTEGRAÇÃO TEMPORAL ------------------------------------!
+  
+  do tt = 1,nt
+      write(*,*) 'tt = ', tt
+      ctime = tt * dt
+  
+      ! KERNEL 3: APLICA AS CONDIÇÕES DE CONTORNO
+      t_bc_inicio_total = omp_get_wtime()
+      call apply_bc_gpu<<<grid, block>>>(totint, totbottom, tottop, tt, dt, d_vel, d_disp)
+      ierr = cudaDeviceSynchronize()
+      t_bc_fim_sync = omp_get_wtime()
+      tempo_total_bc_cuda_s = tempo_total_bc_cuda_s + (t_bc_fim_sync - t_bc_inicio_total)
+  
+      ! KERNEL 4: CALCULA AS FORÇAS E O DANO
+      t_f_inicio = omp_get_wtime()
+      call compute_force_damage_gpu<<<grid_familia, block>>>(totnode, maxfam, coord_d, d_disp, d_pforce, &
+                                                           d_fail, d_dmg, numfam_d, pointfam_d, nodefam_d, &
+                                                           d_fncst, delta, radij, pi, bc, vol, scr0, length)
+      ierr = cudaDeviceSynchronize()
+      t_f_sync = omp_get_wtime()
+      tempo_total_forca_cuda_s = tempo_total_forca_cuda_s + (t_f_sync - t_f_inicio)
+  
+      ! KERNEL 5: INTEGRADOR DA CINEMÁTICA
+      t_i_inicio = omp_get_wtime()
+      call integrate_kinematics_gpu<<<grid_familia, block>>>(totnode, totint, dens, dt, d_pforce, d_bforce, d_vel, d_disp)
+      ierr = cudaDeviceSynchronize()
+      t_i_fim = omp_get_wtime()
+      tempo_total_integra_s = tempo_total_integra_s + (t_i_fim - t_i_inicio)
+  
+      ! Resgate dos dados para escrever os resultados
+      if (tt.eq.750 .or. tt.eq.1000 .or. tt.eq.1250) then
+          disp(1:totnode, 1:2) = d_disp(1:totnode, 1:2)
+          dmg(1:totnode) = d_dmg(1:totnode)
+  
+          if (tt.eq.750) then
+              open(26,file = 'coord_disp_pd_750_pwc_v20.txt')
+              do i = 1, totint
+                  write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i)
+              enddo
+              close(26)
+          elseif (tt.eq.1000) then
+              open(26,file = 'coord_disp_pd_1000_pwc_v20.txt')
+              do i = 1, totint
+                  write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i)
+              enddo
+              close(26)
+          elseif (tt.eq.1250) then
+              open(26,file = 'coord_disp_pd_1250_pwc_v20.txt')
+              do i = 1, totint
+                  write(26,111) coord(i,1), coord(i,2), disp(i,1), disp(i,2), dmg(i)
+              enddo
+              close(26)
+          endif
+      endif
+  
+  enddo
+  
+  111 format(e12.5,3x,e12.5,3x,e12.5,3x,e12.5,3x,e12.5)
+  
+  ! --------------------------- Inicio da escrita dos resultados -------------------------------
+  t_inicio_io = omp_get_wtime()
+  
+  open(unit=26, file='familia_resultados_cuda.txt', status='replace')
+  
+  write(26, *) "===================================================="
+  write(26, *) "INDICE DOS PONTOS DE CADA FAMILIA (POINTFAM)"
+  write(26, *) "Formato: (Indice do Ponto, Indice de Inicio em NODEFAM)"
+  write(26, *) "===================================================="
+  do i = 1, totnode
+      write(26, '(I10, A, I10)') i, " , ", pointfam(i)
+  enddo
+  
+  write(26, *) ""
+  write(26, *) "===================================================="
+  write(26, *) "PONTOS QUE COMPOEM A FAMILIA (NODEFAM)"
+  write(26, *) "Formato: Familia do Ponto X (Total: Y)"
+  write(26, *) "         [lista de pontos j]"
+  write(26, *) "===================================================="
+  do i = 1, totnode
+      write(26, '(A, I10, A, I6, A)') "Familia do Ponto ", i, " (Total: ", numfam(i), ")"
+  
+      if (numfam(i) > 0) then
+          do j = 1, numfam(i)
+              write(26, '(I10, 1x)', advance='no') nodefam(pointfam(i) + j - 1)
+          enddo
+          write(26, *)
+      else
+          write(26, '(A)') "  (Familia vazia)"
+      endif
+      write(26, *)
+  enddo
+  
+  ! Desalocações Finais
+  deallocate(coord_d, numfam_d, pointfam_d, nodefam, nodefam_d)
+  deallocate(d_vel, d_disp, d_pforce, d_fncst, d_dmg, d_fail, d_bforce)
+  
+  t_final_io = omp_get_wtime()
+  tempo_total_io_s = t_final_io - t_inicio_io
+  
+  t_final_total = omp_get_wtime()
+  tempo_wall_clock = t_final_total - t_inicio_total
+  
+  write(26, *) ""
+  write(26, *) "===== RESUMO DE PERFORMANCE (CUDA FORTRAN) ====="
+  write(26, '(A, F12.6, A)') "Tempo Total da Topologia (Fase 1+2+3): ", tempo_total_sim_s, " s"
+  write(26, '(A, F12.6, A)') "  -> Parte 1 (GPU Count):                ", tempo_parte_a, " s"
+  write(26, '(A, F12.6, A)') "  -> Parte 2 (CPU Scan/Prefix Sum):      ", tempo_parte_b, " s"
+  write(26, '(A, F12.6, A)') "  -> Parte 3 (GPU Fill nodefam):         ", tempo_parte_c, " s"
+  write(26, '(A, F12.6, A)') "Tempo das Condicoes (Kernel 3):        ", tempo_total_bc_cuda_s, " s"
+  write(26, '(A, F12.6, A)') "Tempo de Forcas/Dano (Kernel 4):       ", tempo_total_forca_cuda_s, " s"
+  write(26, '(A, F12.6, A)') "Tempo do Integrador (Kernel 5):        ", tempo_total_integra_s, " s"
+  write(26, '(A, F12.6, A)') "Tempo de Escrita (I/O):                ", tempo_total_io_s, " s"
+  write(26, '(A, F12.6, A)') "Tempo Total do Programa (Wall-clock):  ", tempo_wall_clock, " s"
+  write(26, *) "--------------------------------------------------"
+  if (tempo_wall_clock > 0.0d0) then
+      write(26, '(A, F12.2, A)') "Impacto das Forcas no Tempo Total:     ", (tempo_total_forca_cuda_s / tempo_wall_clock) * 100.0d0, " %"
+  endif
+  write(26, *) "================================================"
+  
+  close(26)
+  
+  print *, "Simulacao finalizada com sucesso!"
+  print *, "O relatorio de performance foi salvo no final de 'familia_resultados_cuda.txt'."
+  
+  end program main
