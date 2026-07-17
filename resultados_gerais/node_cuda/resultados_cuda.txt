@@ -75,3 +75,27 @@ Tempo Total do Programa (Wall-clock):     40.205489 s
  --------------------------------------------------
 Impacto das Forcas no Tempo Total:            40.26 %
  ================================================
+
+
+
+Media das rodadas. 
+
+
+
+Número de rodadas detectadas: 5
+
+Métrica                                             Média (s)
+--------------------------------------------------------------
+Tempo Total da Topologia (Fase 1+2+3)               17.632654 s
+  -> Parte 1 (GPU Count)                             8.802861 s
+  -> Parte 2 (CPU Scan/Prefix Sum)                   0.000157 s
+  -> Parte 3 (GPU Fill nodefam)                      8.829520 s
+Tempo das Condicoes (Kernel 3)                       0.006054 s
+Tempo de Forcas/Dano (Kernel 4)                     16.339125 s
+Tempo do Integrador (Kernel 5)                       0.100850 s
+Tempo de Escrita (I/O)                               0.796356 s
+Tempo Total do Programa (Wall-clock)                40.643834 s
+Impacto das Forcas no Tempo Total (%)               40.202000 %
+
+
+

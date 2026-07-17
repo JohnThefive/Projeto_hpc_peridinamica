@@ -1,0 +1,39 @@
+(Execução em CUDA) 
+Tempo Total da Topologia (Fase 1+2+3)               17.632654 s
+  -> Parte 1 (GPU Count)                             8.802861 s
+  -> Parte 2 (CPU Scan/Prefix Sum)                   0.000157 s
+  -> Parte 3 (GPU Fill nodefam)                      8.829520 s
+Tempo das Condicoes (Kernel 3)                       0.006054 s
+Tempo de Forcas/Dano (Kernel 4)                     16.339125 s
+Tempo do Integrador (Kernel 5)                       0.100850 s
+Tempo de Escrita (I/O)                               0.796356 s
+Tempo Total do Programa (Wall-clock)                40.643834 s
+
+(Execução OpenMP offloading )
+Tempo de execucao (OMP_GET_WTIME)                   17.389242 s
+  -> Parte 1 (contagem numfam)                       8.683515 s
+  -> Parte 2 (pointfam - scan paralelo)              0.000115 s
+  -> Parte 3 (preenchimento nodefam)                 8.705611 s
+Tempo das Condicoes de Contorno (BC)                 0.011098 s
+Tempo de Calculo de Forcas/Dano                     16.087516 s
+Tempo de Escrita (I/O)                               5.187840 s
+Tempo Total do Programa (Wall-clock)                39.315575 s
+
+(Execução OpenMP onLoading) 
+Tempo Total da Topologia (Fase 1+2+3)               32.672513 s
+  -> Parte 1 (Contagem)                             16.369967 s
+  -> Parte 2 (Scan/Prefix Sum)                       0.007303 s
+  -> Parte 3 (Preenchimento)                        16.295243 s
+Tempo das Condicoes (BC)                            21.043836 s
+Tempo de Forcas/Dano                                64.331977 s
+Tempo de Escrita (I/O)                               2.382416 s
+Tempo Total do Programa (Wall-clock)               131.621764 s
+
+
+(Execução Serial) 
+
+Tempo de Pre-processamento          102.220405 s
+Tempo das Condicoes (BC)              0.015290 s
+Tempo de Forcas/Dano                238.891819 s
+Tempo de Escrita (I/O)                2.317983 s
+Tempo Total do Programa             354.528026 s
