@@ -1,0 +1,141 @@
+Rodada 1 
+
+Tempo de execucao (OMP_GET_WTIME):    17.396778 segundos
+
+tempo de execucao parte 1 (contagem numfam):     8.665616 segundos
+tempo de execucao parte 2 (calculo pointfam - scan paralelo ):     0.000118 segundos
+tempo de execucao parte 3 (preenchimento nodefam):     8.731044 segundos
+
+ ====================================================
+ TEMPO DAS CONDICOES DE CONTORNO (BC)
+ ====================================================
+Tempo acumulado das condicoes de contorno:     0.011091 segundos
+
+ ====================================================
+ TEMPO DE CALCULO DE FORCAS/DANO
+ ====================================================
+Tempo acumulado do calculo de forcas/dano:    16.138549 segundos
+
+ ====================================================
+ TEMPO DE ESCRITA (I/O)
+ ====================================================
+Tempo acumulado de escrita dos arquivos de saida:     5.006515 segundos
+
+ ====================================================
+ TEMPO TOTAL DO PROGRAMA (WALL-CLOCK)
+ ====================================================
+Tempo total do programa:    39.201375 segundos
+
+
+
+Rodada 2
+
+Tempo de execucao (OMP_GET_WTIME):    17.334932 segundos
+
+tempo de execucao parte 1 (contagem numfam):     8.667263 segundos
+tempo de execucao parte 2 (calculo pointfam - scan paralelo ):     0.000114 segundos
+tempo de execucao parte 3 (preenchimento nodefam):     8.667555 segundos
+
+ ====================================================
+ TEMPO DAS CONDICOES DE CONTORNO (BC)
+ ====================================================
+Tempo acumulado das condicoes de contorno:     0.010986 segundos
+
+ ====================================================
+ TEMPO DE CALCULO DE FORCAS/DANO
+ ====================================================
+Tempo acumulado do calculo de forcas/dano:    16.083682 segundos
+
+ ====================================================
+ TEMPO DE ESCRITA (I/O)
+ ====================================================
+Tempo acumulado de escrita dos arquivos de saida:     4.959643 segundos
+
+ ====================================================
+ TEMPO TOTAL DO PROGRAMA (WALL-CLOCK)
+ ====================================================
+Tempo total do programa:    39.026960 segundos
+
+Rodada 3 
+
+Tempo de execucao (OMP_GET_WTIME):    17.407364 segundos
+
+tempo de execucao parte 1 (contagem numfam):     8.702603 segundos
+tempo de execucao parte 2 (calculo pointfam - scan paralelo ):     0.000112 segundos
+tempo de execucao parte 3 (preenchimento nodefam):     8.704649 segundos
+
+ ====================================================
+ TEMPO DAS CONDICOES DE CONTORNO (BC)
+ ====================================================
+Tempo acumulado das condicoes de contorno:     0.011268 segundos
+
+ ====================================================
+ TEMPO DE CALCULO DE FORCAS/DANO
+ ====================================================
+Tempo acumulado do calculo de forcas/dano:    15.964279 segundos
+
+ ====================================================
+ TEMPO DE ESCRITA (I/O)
+ ====================================================
+Tempo acumulado de escrita dos arquivos de saida:     5.163880 segundos
+
+ ====================================================
+ TEMPO TOTAL DO PROGRAMA (WALL-CLOCK)
+ ====================================================
+Tempo total do programa:    39.178104 segundos
+
+Rodada 4
+
+Tempo de execucao (OMP_GET_WTIME):    17.343219 segundos
+
+tempo de execucao parte 1 (contagem numfam):     8.651240 segundos
+tempo de execucao parte 2 (calculo pointfam - scan paralelo ):     0.000118 segundos
+tempo de execucao parte 3 (preenchimento nodefam):     8.691861 segundos
+
+ ====================================================
+ TEMPO DAS CONDICOES DE CONTORNO (BC)
+ ====================================================
+Tempo acumulado das condicoes de contorno:     0.010907 segundos
+
+ ====================================================
+ TEMPO DE CALCULO DE FORCAS/DANO
+ ====================================================
+Tempo acumulado do calculo de forcas/dano:    16.085821 segundos
+
+ ====================================================
+ TEMPO DE ESCRITA (I/O)
+ ====================================================
+Tempo acumulado de escrita dos arquivos de saida:     5.193524 segundos
+
+ ====================================================
+ TEMPO TOTAL DO PROGRAMA (WALL-CLOCK)
+ ====================================================
+Tempo total do programa:    39.275247 segundos
+
+Rodada 5 
+
+Tempo de execucao (OMP_GET_WTIME):    17.463915 segundos
+
+tempo de execucao parte 1 (contagem numfam):     8.730854 segundos
+tempo de execucao parte 2 (calculo pointfam - scan paralelo ):     0.000114 segundos
+tempo de execucao parte 3 (preenchimento nodefam):     8.732947 segundos
+
+ ====================================================
+ TEMPO DAS CONDICOES DE CONTORNO (BC)
+ ====================================================
+Tempo acumulado das condicoes de contorno:     0.011236 segundos
+
+ ====================================================
+ TEMPO DE CALCULO DE FORCAS/DANO
+ ====================================================
+Tempo acumulado do calculo de forcas/dano:    16.165249 segundos
+
+ ====================================================
+ TEMPO DE ESCRITA (I/O)
+ ====================================================
+Tempo acumulado de escrita dos arquivos de saida:     5.615638 segundos
+
+ ====================================================
+ TEMPO TOTAL DO PROGRAMA (WALL-CLOCK)
+ ====================================================
+Tempo total do programa:    39.896190 segundos

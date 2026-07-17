@@ -1,0 +1,77 @@
+1 rodada 
+
+ ===== RESUMO DE PERFORMANCE (CUDA FORTRAN) =====
+Tempo Total da Topologia (Fase 1+2+3):    17.573084 s
+  -> Parte 1 (GPU Count):                    8.778870 s
+  -> Parte 2 (CPU Scan/Prefix Sum):          0.000142 s
+  -> Parte 3 (GPU Fill nodefam):             8.793958 s
+Tempo das Condicoes (Kernel 3):            0.006201 s
+Tempo de Forcas/Dano (Kernel 4):          16.392254 s
+Tempo do Integrador (Kernel 5):            0.101035 s
+Tempo de Escrita (I/O):                    0.792285 s
+Tempo Total do Programa (Wall-clock):     41.084162 s
+ --------------------------------------------------
+Impacto das Forcas no Tempo Total:            39.90 %
+ ================================================
+
+2 rodada 
+
+ ===== RESUMO DE PERFORMANCE (CUDA FORTRAN) =====
+Tempo Total da Topologia (Fase 1+2+3):    17.680288 s
+  -> Parte 1 (GPU Count):                    8.813221 s
+  -> Parte 2 (CPU Scan/Prefix Sum):          0.000176 s
+  -> Parte 3 (GPU Fill nodefam):             8.866773 s
+Tempo das Condicoes (Kernel 3):            0.005981 s
+Tempo de Forcas/Dano (Kernel 4):          16.393552 s
+Tempo do Integrador (Kernel 5):            0.100912 s
+Tempo de Escrita (I/O):                    0.799826 s
+Tempo Total do Programa (Wall-clock):     40.515449 s
+ --------------------------------------------------
+Impacto das Forcas no Tempo Total:            40.46 %
+ ================================================
+
+3 rodada 
+ ===== RESUMO DE PERFORMANCE (CUDA FORTRAN) =====
+Tempo Total da Topologia (Fase 1+2+3):    17.556887 s
+  -> Parte 1 (GPU Count):                    8.762239 s
+  -> Parte 2 (CPU Scan/Prefix Sum):          0.000159 s
+  -> Parte 3 (GPU Fill nodefam):             8.794372 s
+Tempo das Condicoes (Kernel 3):            0.006115 s
+Tempo de Forcas/Dano (Kernel 4):          16.322745 s
+Tempo do Integrador (Kernel 5):            0.100714 s
+Tempo de Escrita (I/O):                    0.797742 s
+Tempo Total do Programa (Wall-clock):     40.404661 s
+ --------------------------------------------------
+Impacto das Forcas no Tempo Total:            40.40 %
+ ================================================
+
+4 rodada 
+Tempo Total da Topologia (Fase 1+2+3):    17.706225 s
+  -> Parte 1 (GPU Count):                    8.844936 s
+  -> Parte 2 (CPU Scan/Prefix Sum):          0.000154 s
+  -> Parte 3 (GPU Fill nodefam):             8.861019 s
+Tempo das Condicoes (Kernel 3):            0.006006 s
+Tempo de Forcas/Dano (Kernel 4):          16.398740 s
+Tempo do Integrador (Kernel 5):            0.100947 s
+Tempo de Escrita (I/O):                    0.788928 s
+Tempo Total do Programa (Wall-clock):     41.009409 s
+ --------------------------------------------------
+Impacto das Forcas no Tempo Total:            39.99 %
+ ================================================
+
+5 rodada 
+
+
+ ===== RESUMO DE PERFORMANCE (CUDA FORTRAN) =====
+Tempo Total da Topologia (Fase 1+2+3):    17.646786 s
+  -> Parte 1 (GPU Count):                    8.815037 s
+  -> Parte 2 (CPU Scan/Prefix Sum):          0.000154 s
+  -> Parte 3 (GPU Fill nodefam):             8.831478 s
+Tempo das Condicoes (Kernel 3):            0.005969 s
+Tempo de Forcas/Dano (Kernel 4):          16.188333 s
+Tempo do Integrador (Kernel 5):            0.100642 s
+Tempo de Escrita (I/O):                    0.802997 s
+Tempo Total do Programa (Wall-clock):     40.205489 s
+ --------------------------------------------------
+Impacto das Forcas no Tempo Total:            40.26 %
+ ================================================

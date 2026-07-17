@@ -1,0 +1,71 @@
+1 rodada 
+
+ ===== RESUMO DE PERFORMANCE (OPENMP CPU) =====
+Tempo Total da Topologia (Fase 1+2+3):    32.252376 s
+  -> Parte 1 (Contagem):                    16.124494 s
+  -> Parte 2 (Scan/Prefix Sum):              0.008937 s
+  -> Parte 3 (Preenchimento):               16.118945 s
+Tempo das Condicoes (BC):                 20.093654 s
+Tempo de Forcas/Dano:                     69.846076 s
+Tempo de Escrita (I/O):                    1.812947 s
+Tempo Total do Programa (Wall-clock):    135.435674 s
+ ==============================================
+
+
+2 rodada
+
+ ===== RESUMO DE PERFORMANCE (OPENMP CPU) =====
+Tempo Total da Topologia (Fase 1+2+3):    32.215029 s
+  -> Parte 1 (Contagem):                    16.689156 s
+  -> Parte 2 (Scan/Prefix Sum):              0.010364 s
+  -> Parte 3 (Preenchimento):               15.515509 s
+Tempo das Condicoes (BC):                 22.143507 s
+Tempo de Forcas/Dano:                     63.499712 s
+Tempo de Escrita (I/O):                    2.538515 s
+Tempo Total do Programa (Wall-clock):    131.058109 s
+ ==============================================
+
+
+3 rodada
+
+ ===== RESUMO DE PERFORMANCE (OPENMP CPU) =====
+Tempo Total da Topologia (Fase 1+2+3):    32.977935 s
+  -> Parte 1 (Contagem):                    15.686006 s
+  -> Parte 2 (Scan/Prefix Sum):              0.005136 s
+  -> Parte 3 (Preenchimento):               17.286793 s
+Tempo das Condicoes (BC):                 21.107972 s
+Tempo de Forcas/Dano:                     62.878438 s
+Tempo de Escrita (I/O):                    2.507360 s
+Tempo Total do Programa (Wall-clock):    130.866968 s
+ ==============================================
+
+
+4 rodada
+
+ ===== RESUMO DE PERFORMANCE (OPENMP CPU) =====
+Tempo Total da Topologia (Fase 1+2+3):    33.273994 s
+  -> Parte 1 (Contagem):                    17.386539 s
+  -> Parte 2 (Scan/Prefix Sum):              0.008027 s
+  -> Parte 3 (Preenchimento):               15.879428 s
+Tempo das Condicoes (BC):                 20.389187 s
+Tempo de Forcas/Dano:                     62.977235 s
+Tempo de Escrita (I/O):                    2.500107 s
+Tempo Total do Programa (Wall-clock):    130.050251 s
+ ==============================================
+
+
+
+5 rodada
+
+ ===== RESUMO DE PERFORMANCE (OPENMP CPU) =====
+Tempo Total da Topologia (Fase 1+2+3):    32.643231 s
+  -> Parte 1 (Contagem):                    15.963641 s
+  -> Parte 2 (Scan/Prefix Sum):              0.004052 s
+  -> Parte 3 (Preenchimento):               16.675538 s
+Tempo das Condicoes (BC):                 21.484860 s
+Tempo de Forcas/Dano:                     62.458425 s
+Tempo de Escrita (I/O):                    2.553153 s
+Tempo Total do Programa (Wall-clock):    130.697818 s
+ ==============================================
+
+

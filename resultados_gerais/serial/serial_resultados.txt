@@ -1,0 +1,50 @@
+1 rodada 
+
+ ===== RESUMO DE PERFORMANCE (SEQUENCIAL) =====
+Tempo de Pre-processamento:    92.571844 s
+Tempo das Condicoes (BC)  :     0.015282 s
+Tempo de Forcas/Dano      :   239.635833 s
+Tempo de Escrita (I/O)    :     2.502881 s
+Tempo Total do Programa   :   345.455691 s
+ ==============================================
+
+2 rodada 
+
+ ===== RESUMO DE PERFORMANCE (SEQUENCIAL) =====
+Tempo de Pre-processamento:    95.360173 s
+Tempo das Condicoes (BC)  :     0.015589 s
+Tempo de Forcas/Dano      :   261.523884 s
+Tempo de Escrita (I/O)    :     2.379442 s
+Tempo Total do Programa   :   370.836941 s
+ ==============================================
+
+3 rodada 
+
+ ===== RESUMO DE PERFORMANCE (SEQUENCIAL) =====
+Tempo de Pre-processamento:    94.354373 s
+Tempo das Condicoes (BC)  :     0.015919 s
+Tempo de Forcas/Dano      :   248.747076 s
+Tempo de Escrita (I/O)    :     2.311546 s
+Tempo Total do Programa   :   356.874630 s
+ ==============================================
+
+
+4 rodada 
+
+ ===== RESUMO DE PERFORMANCE (SEQUENCIAL) =====
+Tempo de Pre-processamento:   121.966478 s
+Tempo das Condicoes (BC)  :     0.014897 s
+Tempo de Forcas/Dano      :   227.143883 s
+Tempo de Escrita (I/O)    :     2.430124 s
+Tempo Total do Programa   :   362.525009 s
+ ==============================================
+
+5 rodada 
+
+ ===== RESUMO DE PERFORMANCE (SEQUENCIAL) =====
+Tempo de Pre-processamento:   106.849159 s
+Tempo das Condicoes (BC)  :     0.014762 s
+Tempo de Forcas/Dano      :   217.408421 s
+Tempo de Escrita (I/O)    :     1.965921 s
+Tempo Total do Programa   :   336.947861 s
+ ==============================================
