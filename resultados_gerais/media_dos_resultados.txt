@@ -1,13 +1,14 @@
 (Execução em CUDA) 
-Tempo Total da Topologia (Fase 1+2+3)               17.632654 s
-  -> Parte 1 (GPU Count)                             8.802861 s
-  -> Parte 2 (CPU Scan/Prefix Sum)                   0.000157 s
-  -> Parte 3 (GPU Fill nodefam)                      8.829520 s
-Tempo das Condicoes (Kernel 3)                       0.006054 s
-Tempo de Forcas/Dano (Kernel 4)                     16.339125 s
-Tempo do Integrador (Kernel 5)                       0.100850 s
-Tempo de Escrita (I/O)                               0.796356 s
-Tempo Total do Programa (Wall-clock)                40.643834 s
+Métrica                                             Média (s)
+--------------------------------------------------------------
+Tempo Total da Topologia (Fase 1+2+3)               17.709064 s
+  -> Parte 1 (GPU Count)                             8.852440 s
+  -> Parte 2 (CPU Scan/Prefix Sum)                   0.001452 s
+  -> Parte 3 (GPU Fill nodefam)                      8.854602 s
+Tempo das Condicoes (Kernel 3)                       0.014603 s
+Tempo de Forcas/Dano (Kernel 4)                     16.338952 s
+Tempo do Integrador (Kernel 5)                       0.145359 s
+Tempo Total do Programa (Wall-clock)                41.248077 s
 
 (Execução OpenMP offloading )
 Tempo de execucao (OMP_GET_WTIME)                   17.389242 s
