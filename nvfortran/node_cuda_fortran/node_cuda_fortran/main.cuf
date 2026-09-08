@@ -314,8 +314,8 @@ program main
       ! KERNEL 4: CALCULA AS FORÇAS E O DANO
       t_f_inicio = omp_get_wtime()
       call compute_force_damage_gpu<<<grid_familia, block>>>(totnode, maxfam, coord_d, d_disp, d_pforce, &
-                                                           d_fail, d_dmg, numfam_d, pointfam_d, nodefam_d, &
-                                                           d_fncst, delta, radij, pi, bc, vol, scr0, length)
+                                                             d_fail, d_dmg, numfam_d, pointfam_d, nodefam_d, &
+                                                             d_fncst, delta, radij, pi, bc, vol, scr0, length)
       ierr = cudaDeviceSynchronize()
       t_f_sync = omp_get_wtime()
       tempo_total_forca_cuda_s = tempo_total_forca_cuda_s + (t_f_sync - t_f_inicio)
@@ -332,6 +332,9 @@ program main
           disp(1:totnode, 1:2) = d_disp(1:totnode, 1:2)
           dmg(1:totnode) = d_dmg(1:totnode)
   
+          ! ACUMULAÇÃO DO TEMPO DE ESCRITA DE ARQUIVOS INTERMEDIÁRIOS
+          t_inicio_io = omp_get_wtime()
+
           if (tt.eq.750) then
               open(26,file = 'coord_disp_pd_750_pwc_v20.txt')
               do i = 1, totint
@@ -351,6 +354,10 @@ program main
               enddo
               close(26)
           endif
+
+          ! ACUMULAÇÃO DOS TEMPOS
+          t_final_io = omp_get_wtime()
+          tempo_total_io_s = tempo_total_io_s + (t_final_io - t_inicio_io)
       endif
   
   enddo
@@ -394,8 +401,9 @@ program main
   deallocate(coord_d, numfam_d, pointfam_d, nodefam, nodefam_d)
   deallocate(d_vel, d_disp, d_pforce, d_fncst, d_dmg, d_fail, d_bforce)
   
+  ! MUDANÇA: SOMA PARA PRESERVAR O TEMPO DOS ARQUIVOS SALVOS NO LOOP
   t_final_io = omp_get_wtime()
-  tempo_total_io_s = t_final_io - t_inicio_io
+  tempo_total_io_s = tempo_total_io_s + (t_final_io - t_inicio_io)
   
   t_final_total = omp_get_wtime()
   tempo_wall_clock = t_final_total - t_inicio_total
@@ -409,7 +417,7 @@ program main
   write(26, '(A, F12.6, A)') "Tempo das Condicoes (Kernel 3):        ", tempo_total_bc_cuda_s, " s"
   write(26, '(A, F12.6, A)') "Tempo de Forcas/Dano (Kernel 4):       ", tempo_total_forca_cuda_s, " s"
   write(26, '(A, F12.6, A)') "Tempo do Integrador (Kernel 5):        ", tempo_total_integra_s, " s"
-  write(26, '(A, F12.6, A)') "Tempo de Escrita (I/O):                ", tempo_total_io_s, " s"
+  write(26, '(A, F12.6, A)') "Tempo TOTAL de Escrita (I/O):          ", tempo_total_io_s, " s"
   write(26, '(A, F12.6, A)') "Tempo Total do Programa (Wall-clock):  ", tempo_wall_clock, " s"
   write(26, *) "--------------------------------------------------"
   if (tempo_wall_clock > 0.0d0) then
