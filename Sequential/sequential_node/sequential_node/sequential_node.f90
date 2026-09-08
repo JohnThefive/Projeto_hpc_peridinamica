@@ -263,15 +263,19 @@ do tt = 1,nt
     t_inicio_bc = omp_get_wtime()
     
     !Application of boundary conditions at the top and bottom edges
+
     do i = (totint+1), totbottom
         vel(i,2) = -20.0d0
         disp(i,2) = -20.0d0 * tt * dt
     enddo
-
+  
     do i = (totbottom+1), tottop
         vel(i,2) = 20.0d0
         disp(i,2) = 20.0d0 * tt * dt
     enddo   
+   
+ 
+   
     
     t_final_bc = omp_get_wtime()
     tempo_total_bc_s = tempo_total_bc_s + (t_final_bc - t_inicio_bc)

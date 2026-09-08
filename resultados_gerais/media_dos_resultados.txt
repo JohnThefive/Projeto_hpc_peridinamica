@@ -19,15 +19,19 @@ Tempo de Calculo de Forcas/Dano                     16.087516 s
 Tempo de Escrita (I/O)                               5.187840 s
 Tempo Total do Programa (Wall-clock)                39.315575 s
 
+
 (Execução OpenMP onLoading) 
-Tempo Total da Topologia (Fase 1+2+3)               32.672513 s
-  -> Parte 1 (Contagem)                             16.369967 s
-  -> Parte 2 (Scan/Prefix Sum)                       0.007303 s
-  -> Parte 3 (Preenchimento)                        16.295243 s
-Tempo das Condicoes (BC)                            21.043836 s
-Tempo de Forcas/Dano                                64.331977 s
-Tempo de Escrita (I/O)                               2.382416 s
-Tempo Total do Programa (Wall-clock)               131.621764 s
+Métrica                                             Média (s)
+--------------------------------------------------------------
+Tempo Total da Topologia (Fase 1+2+3)               17.134117 s
+  -> Parte 1 (Contagem)                              8.714379 s
+  -> Parte 2 (Scan/Prefix Sum)                       0.001513 s
+  -> Parte 3 (Preenchimento)                         8.418226 s
+Tempo das Condicoes (BC)                             0.008785 s
+Tempo de Forcas/Dano                                27.733615 s
+Tempo de Escrita (I/O)                               2.110440 s
+Tempo Total do Programa (Wall-clock)                56.479185 s
+
 
 
 (Execução Serial) 

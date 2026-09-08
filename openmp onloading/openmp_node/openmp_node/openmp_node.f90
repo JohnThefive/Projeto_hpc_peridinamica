@@ -289,24 +289,23 @@ program openmp_node
     do tt = 1, nt
         ctime = tt * dt
         
-        ! ------------------ Boundary Conditions (BC) Paralelo ------------------
+        ! ------------------ Boundary Conditions (BC)  ------------------
         start_time = omp_get_wtime() 
         
-        !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(i)
-        !$OMP DO
-        do i = (totint + 1), totbottom
-          vel(i,2) = -20.0_dp
-          disp(i,2) = -20.0_dp * tt * dt
-        enddo
-        !$OMP END DO
+        !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i)
+    do i = (totint+1), totbottom
+        vel(i,2) = -20.0d0
+        disp(i,2) = -20.0d0 * tt * dt
+    enddo
+    !$OMP END PARALLEL DO
 
-        !$OMP DO
-        do i = (totbottom + 1), tottop
-          vel(i,2) = 20.0_dp
-          disp(i,2) = 20.0_dp * tt * dt
-        enddo   
-        !$OMP END DO
-        !$OMP END PARALLEL
+    !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i)
+    do i = (totbottom+1), tottop
+        vel(i,2) = 20.0d0
+        disp(i,2) = 20.0d0 * tt * dt
+    enddo   
+    !$OMP END PARALLEL DO
+      
         
         end_time = omp_get_wtime()   
         tempo_total_bc_s = tempo_total_bc_s + (end_time - start_time) 
