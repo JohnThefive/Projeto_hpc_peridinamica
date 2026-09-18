@@ -1,14 +1,13 @@
 (Execução em CUDA) 
-Métrica                                             Média (s)
---------------------------------------------------------------
-Tempo Total da Topologia (Fase 1+2+3)               17.709064 s
-  -> Parte 1 (GPU Count)                             8.852440 s
-  -> Parte 2 (CPU Scan/Prefix Sum)                   0.001452 s
-  -> Parte 3 (GPU Fill nodefam)                      8.854602 s
-Tempo das Condicoes (Kernel 3)                       0.014603 s
-Tempo de Forcas/Dano (Kernel 4)                     16.338952 s
-Tempo do Integrador (Kernel 5)                       0.145359 s
-Tempo Total do Programa (Wall-clock)                41.248077 s
+Tempo Total da Topologia (Fase 1+2+3)               17.632654 s
+  -> Parte 1 (GPU Count)                             8.802861 s
+  -> Parte 2 (CPU Scan/Prefix Sum)                   0.000157 s
+  -> Parte 3 (GPU Fill nodefam)                      8.829520 s
+Tempo das Condicoes (Kernel 3)                       0.006054 s
+Tempo de Forcas/Dano (Kernel 4)                     16.339125 s
+Tempo do Integrador (Kernel 5)                       0.100850 s
+Tempo de Escrita (I/O)                               0.796356 s
+Tempo Total do Programa (Wall-clock)                40.643834 s
 
 (Execução OpenMP offloading )
 Tempo de execucao (OMP_GET_WTIME)                   17.389242 s
@@ -21,24 +20,79 @@ Tempo de Escrita (I/O)                               5.187840 s
 Tempo Total do Programa (Wall-clock)                39.315575 s
 
 
-(Execução OpenMP onLoading) 
+
+(Execução OpenMP Onloading) 
+
+2 treads 
 Métrica                                             Média (s)
 --------------------------------------------------------------
-Tempo Total da Topologia (Fase 1+2+3)               17.134117 s
-  -> Parte 1 (Contagem)                              8.714379 s
-  -> Parte 2 (Scan/Prefix Sum)                       0.001513 s
-  -> Parte 3 (Preenchimento)                         8.418226 s
-Tempo das Condicoes (BC)                             0.008785 s
-Tempo de Forcas/Dano                                27.733615 s
-Tempo de Escrita (I/O)                               2.110440 s
-Tempo Total do Programa (Wall-clock)                56.479185 s
+Tempo Total da Topologia (Fase 1+2+3)               55.965014 s
+  -> Parte 1 (Contagem)                             21.737543 s
+  -> Parte 2 (Scan/Prefix Sum)                       0.000085 s
+  -> Parte 3 (Preenchimento)                        34.227385 s
+Tempo das Condicoes (BC)                             0.001732 s
+Tempo de Forcas/Dano                                45.149930 s
+Tempo de Escrita (I/O)                               1.174053 s
+Tempo Total do Programa (Wall-clock)               108.382116 s
 
+4 therads 
 
+Métrica                                             Média (s)
+--------------------------------------------------------------
+Tempo Total da Topologia (Fase 1+2+3)               28.122909 s
+  -> Parte 1 (Contagem)                             10.947808 s
+  -> Parte 2 (Scan/Prefix Sum)                       0.000048 s
+  -> Parte 3 (Preenchimento)                        17.175053 s
+Tempo das Condicoes (BC)                             0.001873 s
+Tempo de Forcas/Dano                                22.789648 s
+Tempo de Escrita (I/O)                               1.169491 s
+Tempo Total do Programa (Wall-clock)                58.211250 s
+
+8 theads 
+
+Métrica                                             Média (s)
+--------------------------------------------------------------
+Tempo Total da Topologia (Fase 1+2+3)               14.243061 s
+  -> Parte 1 (Contagem)                              5.654567 s
+  -> Parte 2 (Scan/Prefix Sum)                       0.000052 s
+  -> Parte 3 (Preenchimento)                         8.588442 s
+Tempo das Condicoes (BC)                             0.001987 s
+Tempo de Forcas/Dano                                11.400718 s
+Tempo de Escrita (I/O)                               1.169839 s
+Tempo Total do Programa (Wall-clock)                32.980628 s
+
+16 therads 
+
+Métrica                                             Média (s)
+--------------------------------------------------------------
+Tempo Total da Topologia (Fase 1+2+3)               12.424792 s
+  -> Parte 1 (Contagem)                              5.345312 s
+  -> Parte 2 (Scan/Prefix Sum)                       0.000128 s
+  -> Parte 3 (Preenchimento)                         7.079351 s
+Tempo das Condicoes (BC)                             0.002145 s
+Tempo de Forcas/Dano                                 8.831869 s
+Tempo de Escrita (I/O)                               1.165880 s
+Tempo Total do Programa (Wall-clock)                29.054208 s
+
+32 thrads 
+Métrica                                             Média (s)
+--------------------------------------------------------------
+Tempo Total da Topologia (Fase 1+2+3)                9.917112 s
+  -> Parte 1 (Contagem)                              4.416735 s
+  -> Parte 2 (Scan/Prefix Sum)                       0.000295 s
+  -> Parte 3 (Preenchimento)                         5.500082 s
+Tempo das Condicoes (BC)                             0.002809 s
+Tempo de Forcas/Dano                                 6.515967 s
+Tempo de Escrita (I/O)                               1.169354 s
+Tempo Total do Programa (Wall-clock)                24.294666 s
 
 (Execução Serial) 
 
-Tempo de Pre-processamento          102.220405 s
-Tempo das Condicoes (BC)              0.015290 s
-Tempo de Forcas/Dano                238.891819 s
-Tempo de Escrita (I/O)                2.317983 s
-Tempo Total do Programa             354.528026 s
+5 rodadas 
+
+===== RESUMO DE PERFORMANCE (SEQUENCIAL) =====
+Tempo de Pre-processamento:    65.017331 s
+Tempo das Condicoes (BC)  :     0.002231 s
+Tempo de Forcas/Dano      :    92.194084 s
+Tempo de Escrita (I/O)    :     1.113687 s
+Tempo Total do Programa   :   164.322931 s
