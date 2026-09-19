@@ -81,14 +81,14 @@ Número de rodadas detectadas: 5
 
 Métrica                                             Média (s)
 --------------------------------------------------------------
-Tempo Total da Topologia (Fase 1+2+3)               17.709064 s
-  -> Parte 1 (GPU Count)                             8.852440 s
-  -> Parte 2 (CPU Scan/Prefix Sum)                   0.001452 s
-  -> Parte 3 (GPU Fill nodefam)                      8.854602 s
-Tempo das Condicoes (Kernel 3)                       0.014603 s
-Tempo de Forcas/Dano (Kernel 4)                     16.338952 s
-Tempo do Integrador (Kernel 5)                       0.145359 s
-Tempo Total do Programa (Wall-clock)                41.248077 s
-Impacto das Forcas no Tempo Total (%)               39.610000 %
-
+Tempo Total da Topologia (Fase 1+2+3)               17.606557 s
+  -> Parte 1 (GPU Count)                             8.799415 s
+  -> Parte 2 (CPU Scan/Prefix Sum)                   0.000562 s
+  -> Parte 3 (GPU Fill nodefam)                      8.806302 s
+Tempo das Condicoes (Kernel 3)                       0.007709 s
+Tempo de Forcas/Dano (Kernel 4)                     16.316901 s
+Tempo do Integrador (Kernel 5)                       0.107128 s
+Tempo de Escrita (I/O)                               5.943996 s
+Tempo Total do Programa (Wall-clock)                40.236486 s
+Impacto das Forcas no Tempo Total (%)               40.440000 %
 
